@@ -172,3 +172,4 @@ offline_open_loop_eval_plots/
 examples/SimplerEnv/fractal20220817_data_lerobot
 output/
 .history/
+checkpoints/

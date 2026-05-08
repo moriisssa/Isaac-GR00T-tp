@@ -20,7 +20,7 @@ RESUME="${RESUME:-0}"
 WANDB_PROJECT="${WANDB_PROJECT:-gr00t-progress}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-fractal_progress_head_chunk_end_suffix_token_masked_mlp_sigmoid}"
 
-BASE_MODEL_PATH="${BASE_MODEL_PATH:-/data-ssd/xucx/Isaac-GR00T/checkpoints/GR00T-N1.7-SimplerEnv-Fractal}"
+BASE_MODEL_PATH="${BASE_MODEL_PATH:-checkpoints/GR00T-N1.7-SimplerEnv-Fractal}"
 DATASET_PATH="${DATASET_PATH:-examples/SimplerEnv/fractal20220817_data_lerobot/}"
 EMBODIMENT_TAG="${EMBODIMENT_TAG:-SIMPLER_ENV_GOOGLE}"
 

@@ -28,7 +28,7 @@ export OUTPUT_DIR
 export PROGRESS_TARGET
 
 uv run bash examples/finetune.sh \
-  --base-model-path /data-ssd/xucx/Isaac-GR00T/checkpoints/GR00T-N1.7-SimplerEnv-Fractal \
+  --base-model-path checkpoints/GR00T-N1.7-SimplerEnv-Fractal \
   --dataset-path examples/SimplerEnv/fractal20220817_data_lerobot/ \
   --embodiment-tag SIMPLER_ENV_GOOGLE \
   --output-dir "$OUTPUT_DIR" \

@@ -99,6 +99,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             nn.init.zeros_(self.progress_head[1].bias)
             nn.init.zeros_(self.progress_head[3].weight)
             nn.init.zeros_(self.progress_head[3].bias)
+            self._register_progress_gradient_sanitizers()
 
         self.vlln = (
             nn.LayerNorm(config.backbone_embedding_dim) if config.use_vlln else nn.Identity()
@@ -217,6 +218,14 @@ class Gr00tN1d7ActionHead(nn.Module):
             pos_id = torch.tensor([position_index], dtype=torch.long, device=device)
             progress_features = progress_features + self.position_embedding(pos_id).unsqueeze(0)
         return progress_features
+
+    def _register_progress_gradient_sanitizers(self) -> None:
+        def _sanitize_grad(grad: torch.Tensor) -> torch.Tensor:
+            return torch.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
+
+        self.progress_token.register_hook(_sanitize_grad)
+        for parameter in self.progress_head.parameters():
+            parameter.register_hook(_sanitize_grad)
 
     def _make_self_attention_mask(
         self,
