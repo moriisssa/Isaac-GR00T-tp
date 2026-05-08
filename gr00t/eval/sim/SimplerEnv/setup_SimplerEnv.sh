@@ -38,6 +38,7 @@ uv pip install -e "$SIMPLER_REPO"
 uv pip install --editable "$PROJECT_REPO" --no-deps
 
 uv pip install tianshou==0.5.1 pydantic av zmq torchvision==0.22.0 transformers==4.57.3 tyro setuptools==80.9.0
+uv pip install PyOpenGL PyOpenGL-accelerate
 
 # Sanity check
 python - <<'PY'

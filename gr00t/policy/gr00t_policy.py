@@ -407,6 +407,9 @@ class Gr00tPolicy(BasePolicy):
         with torch.inference_mode():
             model_pred = self.model.get_action(**collated_inputs)
         normalized_action = model_pred["action_pred"].float()
+        info = {}
+        if "progress_pred" in model_pred:
+            info["progress"] = model_pred["progress_pred"].float().cpu().numpy()
 
         # Step 5: Decode actions from normalized space back to physical units
         batched_states = {}
@@ -420,7 +423,7 @@ class Gr00tPolicy(BasePolicy):
         casted_action = {
             key: value.astype(np.float32) for key, value in unnormalized_action.items()
         }
-        return casted_action, {}
+        return casted_action, info
 
     def check_action(self, action: dict[str, Any]) -> None:
         """Validate that the action has the correct structure and types.

@@ -294,6 +294,7 @@ class DiT(ModelMixin, ConfigMixin):
         hidden_states: torch.Tensor,  # Shape: (B, T, D)
         encoder_hidden_states: torch.Tensor,  # Shape: (B, S, D)
         timestep: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_all_hidden_states: bool = False,
     ):
@@ -311,7 +312,7 @@ class DiT(ModelMixin, ConfigMixin):
             if idx % 2 == 1 and self.config.interleave_self_attention:
                 hidden_states = block(
                     hidden_states,
-                    attention_mask=None,
+                    attention_mask=attention_mask,
                     encoder_hidden_states=None,
                     encoder_attention_mask=None,
                     temb=temb,
@@ -351,6 +352,7 @@ class AlternateVLDiT(DiT):
         hidden_states: torch.Tensor,  # Shape: (B, T, D)
         encoder_hidden_states: torch.Tensor,  # Shape: (B, S, D)
         timestep: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_all_hidden_states: bool = False,
         image_mask: Optional[torch.Tensor] = None,
@@ -369,6 +371,8 @@ class AlternateVLDiT(DiT):
         # image_mask shape: (B, S) where True indicates image tokens
         # For attention, we need to invert: False means "don't attend to this token"
 
+        image_mask = image_mask.bool()
+        backbone_attention_mask = backbone_attention_mask.bool()
         image_attention_mask = image_mask & backbone_attention_mask
         non_image_attention_mask = (~image_mask) & backbone_attention_mask
 
@@ -381,7 +385,7 @@ class AlternateVLDiT(DiT):
                 # Self-attention blocks
                 hidden_states = block(
                     hidden_states,
-                    attention_mask=None,
+                    attention_mask=attention_mask,
                     encoder_hidden_states=None,
                     encoder_attention_mask=None,
                     temb=temb,

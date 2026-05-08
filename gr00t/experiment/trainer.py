@@ -49,6 +49,23 @@ class ProfCallback(TrainerCallback):
         self.prof.step()
 
 
+class ClampProgressTokenCallback(TrainerCallback):
+    def __init__(self, clamp_value: float = 5.0):
+        self.clamp_value = clamp_value
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model = kwargs.get("model")
+        if model is None:
+            return
+        model = getattr(model, "module", model)
+        action_head = getattr(model, "action_head", None)
+        progress_token = getattr(action_head, "progress_token", None)
+        if progress_token is None:
+            return
+        with torch.no_grad():
+            progress_token.clamp_(-self.clamp_value, self.clamp_value)
+
+
 class _BatchIterator:
     """Lightweight iterator that yields pre-collated batches."""
 
@@ -153,6 +170,51 @@ def _batch_accuracy(
 # Global variables for batched evaluation metrics
 _eval_accuracy_accumulated_correct = 0
 _eval_accuracy_accumulated_total = 0
+
+
+def _checkpoint_step(checkpoint_dir: str) -> int:
+    basename = os.path.basename(os.path.normpath(checkpoint_dir))
+    prefix = "checkpoint-"
+    if not basename.startswith(prefix):
+        return -1
+    try:
+        return int(basename[len(prefix) :])
+    except ValueError:
+        return -1
+
+
+def _is_complete_checkpoint(checkpoint_dir: str) -> bool:
+    if not os.path.isdir(checkpoint_dir):
+        return False
+    if not os.path.isfile(os.path.join(checkpoint_dir, TRAINER_STATE_NAME)):
+        return False
+    has_model_weights = any(
+        os.path.isfile(os.path.join(checkpoint_dir, filename))
+        for filename in (
+            "model.safetensors.index.json",
+            "model.safetensors",
+            "pytorch_model.bin",
+            "pytorch_model.bin.index.json",
+        )
+    )
+    return has_model_weights
+
+
+def get_last_complete_checkpoint(output_dir: str) -> str | None:
+    checkpoint_dirs = []
+    if not os.path.isdir(output_dir):
+        return None
+    for entry in os.scandir(output_dir):
+        if not entry.is_dir():
+            continue
+        step = _checkpoint_step(entry.path)
+        if step >= 0:
+            checkpoint_dirs.append((step, entry.path))
+    for _, checkpoint_dir in sorted(checkpoint_dirs, reverse=True):
+        if _is_complete_checkpoint(checkpoint_dir):
+            return checkpoint_dir
+        logging.warning(f"Skipping incomplete checkpoint: {checkpoint_dir}")
+    return None
 
 
 def compute_eval_accuracy(
@@ -266,13 +328,31 @@ class Gr00tTrainer(Trainer):
             resume_from_checkpoint = None
 
         if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
-            resume_from_checkpoint = get_last_checkpoint(self.args.output_dir)
+            resume_from_checkpoint = get_last_complete_checkpoint(self.args.output_dir)
+            hf_last_checkpoint = get_last_checkpoint(self.args.output_dir)
+            if (
+                hf_last_checkpoint is not None
+                and hf_last_checkpoint != resume_from_checkpoint
+                and not _is_complete_checkpoint(hf_last_checkpoint)
+            ):
+                logging.warning(
+                    "Ignoring latest incomplete checkpoint "
+                    f"{hf_last_checkpoint}; using {resume_from_checkpoint}"
+                )
             if resume_from_checkpoint is None:
                 logging.warning(
                     f"No valid checkpoint found in output directory ({self.args.output_dir})"
                 )
 
         if resume_from_checkpoint is not None:
+            if not _is_complete_checkpoint(resume_from_checkpoint):
+                logging.warning(f"Requested checkpoint is incomplete: {resume_from_checkpoint}")
+                resume_from_checkpoint = get_last_complete_checkpoint(self.args.output_dir)
+            if resume_from_checkpoint is None:
+                logging.warning(
+                    f"No valid checkpoint found in output directory ({self.args.output_dir})"
+                )
+                return super().train(resume_from_checkpoint=None, **kwargs)
             logging.info(f"Resuming from checkpoint {resume_from_checkpoint}")
             # In case of repeating the find_executable_batch_size, set `self._train_batch_size` properly
             self.state = TrainerState.load_from_json(
@@ -316,6 +396,43 @@ class Gr00tTrainer(Trainer):
 
         # Record last loss for testing purposes.
         self.loss = loss
+
+        if (
+            self.state.global_step % self.args.logging_steps == 0
+            and model.training
+            and "progress_loss" in outputs
+        ):
+            with torch.no_grad():
+                progress_logs = {
+                    "train_progress_loss": self._nested_gather(outputs["progress_loss"].detach())
+                    .mean()
+                    .item()
+                }
+                progress_target = inputs.get("progress")
+                if progress_target is None and "inputs" in inputs:
+                    progress_target = inputs["inputs"].get("progress")
+                if progress_target is not None and "progress_pred" in outputs:
+                    progress_pred = outputs["progress_pred"].detach()
+                    progress_target = progress_target.to(
+                        device=progress_pred.device,
+                        dtype=progress_pred.dtype,
+                    ).view_as(progress_pred)
+                    progress_mae = (progress_pred - progress_target).abs().mean()
+                    progress_logs.update(
+                        {
+                            "train_progress_mae": self._nested_gather(progress_mae).mean().item(),
+                            "train_progress_pred_mean": self._nested_gather(progress_pred.mean())
+                            .mean()
+                            .item(),
+                            "train_progress_target_mean": self._nested_gather(
+                                progress_target.mean()
+                            )
+                            .mean()
+                            .item(),
+                        }
+                    )
+            if self.args.local_rank in (-1, 0):
+                self.log(progress_logs)
 
         # --------------------------------------------------------------
         # Accuracy calculation

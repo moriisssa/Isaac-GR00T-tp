@@ -57,9 +57,40 @@ class FinetuneConfig:
     tune_diffusion_model: bool = True
     """If True, fine-tune the diffusion-based action decoder (if present in the model)."""
 
+    tune_vlln: bool = True
+    """If True, fine-tune the VLM-to-diffusion normalization/attention adapters."""
+
     state_dropout_prob: float = 0.2
     """
     Dropout probability applied to state inputs for regularization during training.
+    """
+
+    enable_progress_head: bool = False
+    """
+    If True, append a learnable Progress Token after action tokens and train an auxiliary
+    MLP progress regression head using normalized episode time labels.
+    """
+
+    tune_progress_head: bool = True
+    """
+    If True, train only the newly added progress token/head when the pretrained GR00T body
+    is frozen via the other tune_* flags.
+    """
+
+    progress_loss_weight: float = 0.1
+    """Weight for the auxiliary progress regression loss."""
+
+    isolate_progress_action_attention: bool = False
+    """
+    If True, keep state/action token self-attention equivalent to the original GR00T path
+    by hiding the Progress Token from them. The Progress Token can only attend to itself
+    and state tokens. Vision-language cross-attention remains unchanged.
+    """
+
+    progress_target: str = "current"
+    """
+    Progress label target. Use "current" for current observation progress, or
+    "chunk_end" for progress at the end of the action chunk.
     """
 
     # --- Data Augmentation ---
@@ -128,6 +159,9 @@ class FinetuneConfig:
 
     num_gpus: int = 1
     """Number of GPUs available for distributed or single-node training."""
+
+    use_ddp: bool = False
+    """If True, use PyTorch DDP instead of DeepSpeed for multi-GPU training."""
 
     use_wandb: bool = False
     """

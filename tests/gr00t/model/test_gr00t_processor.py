@@ -134,6 +134,14 @@ class TestProcessorCall:
         result = processor(messages)
         assert isinstance(result["embodiment_id"], (int, np.integer))
 
+    def test_progress_metadata_is_passed(self, processor, proc_config):
+        step_data = _make_step_data(proc_config)
+        step_data.metadata["progress"] = np.array([0.5], dtype=np.float32)
+        messages = [{"type": MessageType.EPISODE_STEP.value, "content": step_data}]
+        result = processor(messages)
+        assert "progress" in result
+        np.testing.assert_allclose(result["progress"].numpy(), np.array([0.5], dtype=np.float32))
+
 
 class TestProcessorVLMInputs:
     """Test VLM input generation."""

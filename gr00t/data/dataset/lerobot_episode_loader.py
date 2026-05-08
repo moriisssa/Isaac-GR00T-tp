@@ -61,6 +61,7 @@ DEFAULT_COLUMN_NAMES = {
     "state": "observation.state",
     "action": "action",
 }
+EPISODE_METADATA_COLUMNS = ["timestamp", "frame_index", "episode_index", "index", "task_index"]
 
 LANG_KEYS = ["task", "sub_task"]
 
@@ -364,6 +365,13 @@ class LeRobotEpisodeLoader:
         parquet_path = self.dataset_path / parquet_filename
         original_df = pd.read_parquet(parquet_path)
         loaded_df = pd.DataFrame()
+
+        # Keep standard LeRobot per-frame metadata available to downstream
+        # processors.  These columns are ignored by the normal modality extractor
+        # but can be used for auxiliary labels such as normalized task progress.
+        for column in EPISODE_METADATA_COLUMNS:
+            if column in original_df.columns:
+                loaded_df[column] = original_df[column]
 
         # Process language annotations (convert task indices to task strings)
         if "language" in self.modality_configs:

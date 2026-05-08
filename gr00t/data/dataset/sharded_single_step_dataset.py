@@ -25,12 +25,57 @@ from gr00t.data.types import EmbodimentTag, MessageType, ModalityConfig, VLAStep
 from .lerobot_episode_loader import LeRobotEpisodeLoader
 
 
+def compute_progress_label(
+    episode_data: pd.DataFrame,
+    step_index: int,
+    action_horizon: int | None = None,
+    target: str = "current",
+) -> np.ndarray:
+    """Compute a normalized progress label in [0, 1] for one episode step.
+
+    The preferred signal is timestamp / final_timestamp because Fractal and
+    other LeRobot datasets expose timestamps directly.  When timestamps are not
+    present, the function falls back to frame_index, then to row position.
+    """
+    if len(episode_data) <= 1:
+        return np.array([1.0], dtype=np.float32)
+
+    label_index = step_index
+    if target == "chunk_end":
+        if action_horizon is None:
+            raise ValueError("action_horizon is required when target='chunk_end'")
+        label_index = step_index + action_horizon - 1
+    elif target != "current":
+        raise ValueError(f"Unsupported progress target: {target}")
+    label_index = max(0, min(label_index, len(episode_data) - 1))
+
+    if "timestamp" in episode_data.columns:
+        timestamps = episode_data["timestamp"].astype(float)
+        total = float(timestamps.iloc[-1] - timestamps.iloc[0])
+        if total > 1e-8:
+            progress = (float(timestamps.iloc[label_index]) - float(timestamps.iloc[0])) / total
+            return np.array([np.clip(progress, 0.0, 1.0)], dtype=np.float32)
+
+    if "frame_index" in episode_data.columns:
+        frame_indices = episode_data["frame_index"].astype(float)
+        total = float(frame_indices.iloc[-1] - frame_indices.iloc[0])
+        if total > 0:
+            progress = (
+                float(frame_indices.iloc[label_index]) - float(frame_indices.iloc[0])
+            ) / total
+            return np.array([np.clip(progress, 0.0, 1.0)], dtype=np.float32)
+
+    progress = label_index / max(len(episode_data) - 1, 1)
+    return np.array([np.clip(progress, 0.0, 1.0)], dtype=np.float32)
+
+
 def extract_step_data(
     episode_data: pd.DataFrame,
     step_index: int,
     modality_configs: dict[str, ModalityConfig],
     embodiment_tag: EmbodimentTag,
     allow_padding: bool = False,
+    progress_target: str = "current",
 ) -> VLAStepData:
     step_data = {}
 
@@ -76,6 +121,14 @@ def extract_step_data(
         actions=action_data,
         text=text,
         embodiment=embodiment_tag,
+        metadata={
+            "progress": compute_progress_label(
+                episode_data,
+                step_index,
+                action_horizon=len(modality_configs["action"].delta_indices),
+                target=progress_target,
+            )
+        },
     )
     return vla_step_data
 
@@ -140,6 +193,7 @@ class ShardedSingleStepDataset(ShardedDataset):
         episode_sampling_rate: float = 0.1,
         seed: int = 42,
         allow_padding: bool = False,
+        progress_target: str = "current",
     ):
         """Initialize single-step dataset with sharding configuration."""
         super().__init__(dataset_path)
@@ -151,6 +205,7 @@ class ShardedSingleStepDataset(ShardedDataset):
         self.episode_sampling_rate = episode_sampling_rate
         self.seed = seed
         self.allow_padding = allow_padding
+        self.progress_target = progress_target
         self.processor = None
         self.rng = np.random.default_rng(seed)
         action_delta_indices = modality_configs["action"].delta_indices
@@ -255,6 +310,7 @@ class ShardedSingleStepDataset(ShardedDataset):
             self.modality_configs,
             self.embodiment_tag,
             self.allow_padding,
+            progress_target=self.progress_target,
         )
         # Apply processor to convert to model inputs
         messages = [{"type": MessageType.EPISODE_STEP.value, "content": vla_step_data}]

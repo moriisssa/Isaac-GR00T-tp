@@ -30,10 +30,31 @@ import wandb
 from gr00t.configs.base_config import Config
 
 # Use custom trainer that profiles data loading & forward times
-from gr00t.experiment.trainer import Gr00tTrainer, ProfCallback
+from gr00t.experiment.trainer import ClampProgressTokenCallback, Gr00tTrainer, ProfCallback
 from gr00t.experiment.utils import BestMetricCheckpointCallback, CheckpointFormatCallback
 from gr00t.model import MODEL_REGISTRY
 from gr00t.utils.initial_actions import INITIAL_ACTIONS_FILENAME, save_initial_actions
+
+
+def disable_deepspeed_probe_for_ddp():
+    """Prevent Accelerate from importing DeepSpeed while using plain DDP.
+
+    Accelerate's unwrap_model() imports deepspeed whenever the package is
+    installed, even if TrainingArguments.deepspeed is None. On machines with
+    PyTorch CUDA runtime but no CUDA toolkit, importing deepspeed can fail while
+    checking CUDA_HOME. Plain DDP does not need DeepSpeed, so hide it from the
+    small availability probes in this process.
+    """
+    try:
+        import accelerate.accelerator as accelerate_accelerator
+        import accelerate.utils.imports as accelerate_imports
+        import accelerate.utils.other as accelerate_other
+    except ImportError:
+        return
+
+    accelerate_imports.is_deepspeed_available = lambda: False
+    accelerate_other.is_deepspeed_available = lambda: False
+    accelerate_accelerator.is_deepspeed_available = lambda: False
 
 
 def setup_logging(debug: bool = False):
@@ -198,6 +219,8 @@ def run(config: Config):
         deepspeed_config = config.get_deepspeed_config()
     else:
         deepspeed_config = None
+        if config.training.use_ddp:
+            disable_deepspeed_probe_for_ddp()
 
     # for now we will let batch_size override global_batch_size, in future we will deprecate batch_size
     if config.training.batch_size is None:
@@ -256,6 +279,8 @@ def run(config: Config):
             processor_dir=processor_dir,
         )
     )
+    if config.model.enable_progress_head:
+        trainer.add_callback(ClampProgressTokenCallback())
 
     if config.training.save_best_eval_metric_name != "":
         trainer.add_callback(

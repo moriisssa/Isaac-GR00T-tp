@@ -112,11 +112,22 @@ class Gr00tN1d7Config(PretrainedConfig):
     tune_projector: bool = True
     tune_diffusion_model: bool = True
     tune_vlln: bool = True
+    tune_progress_head: bool = True
 
     # State augmentation parameters
     state_dropout_prob: float = 0.8  # State dropout probability
     exclude_state: bool = False  # Zero out all state inputs (ablation)
     use_mean_std: bool = False  # Use mean/std normalization instead of min/max
+
+    # Auxiliary task-progress prediction.  When enabled, the action head appends
+    # a learned progress token after the action tokens and predicts normalized
+    # task progress from that token while keeping diffusion action denoising
+    # unchanged. Labels are normalized to [0, 1], and the MLP prediction head
+    # is sigmoid-clamped to the same range. By default, state/action tokens cannot see the
+    # Progress Token, and the Progress Token only sees itself and state tokens.
+    enable_progress_head: bool = False
+    progress_loss_weight: float = 0.1
+    isolate_progress_action_attention: bool = False
 
     # Multi-embodiment parameters
     max_num_embodiments: int = 32

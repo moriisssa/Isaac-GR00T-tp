@@ -14,9 +14,11 @@
 # limitations under the License.
 
 from collections import defaultdict
+import csv
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
+import json
 from pathlib import Path
 import sys
 import time
@@ -99,6 +101,16 @@ class WrapperConfigs:
 
     video: VideoConfig = field(default_factory=VideoConfig)
     multistep: MultiStepConfig = field(default_factory=MultiStepConfig)
+
+
+@dataclass
+class ProgressCurveConfig:
+    """Configuration for optional progress prediction curve logging."""
+
+    output_dir: str | None = None
+    success_only: bool = False
+    target: str = "current"
+    target_offset_steps: int = 0
 
 
 def get_simpler_env_fn(
@@ -218,12 +230,314 @@ class _RobustAsyncVectorEnv(gym.vector.AsyncVectorEnv):
         return infos
 
 
+def _extract_progress_predictions(policy_info: dict[str, Any], n_envs: int) -> list[float | None]:
+    if "progress" not in policy_info:
+        return [None] * n_envs
+
+    progress = np.asarray(policy_info["progress"], dtype=np.float32).reshape(-1)
+    if progress.size == 1 and n_envs > 1:
+        progress = np.repeat(progress, n_envs)
+
+    predictions: list[float | None] = []
+    for env_idx in range(n_envs):
+        if env_idx >= progress.size or not np.isfinite(progress[env_idx]):
+            predictions.append(None)
+        else:
+            predictions.append(float(progress[env_idx]))
+    return predictions
+
+
+def _finalize_progress_episode(
+    episode_rows: list[dict[str, Any]],
+    *,
+    episode_index: int,
+    success: bool,
+    valid: bool,
+    target: str,
+    target_offset_steps: int,
+    final_primitive_step: int,
+) -> list[dict[str, Any]]:
+    episode_length = len(episode_rows)
+    denominator = max(final_primitive_step, 1)
+    finalized_rows = []
+
+    for row in episode_rows:
+        if target == "current":
+            target_step = row["primitive_step"]
+        elif target == "chunk_end":
+            target_step = min(row["primitive_step"] + target_offset_steps, denominator)
+        else:
+            raise ValueError(f"Unsupported progress curve target: {target}")
+        target_progress = float(target_step / denominator)
+        progress_pred = row["progress_pred"]
+        finalized_rows.append(
+            {
+                "episode": episode_index,
+                "env_idx": row["env_idx"],
+                "step": row["step"],
+                "primitive_step": row["primitive_step"],
+                "episode_length": episode_length,
+                "final_primitive_step": final_primitive_step,
+                "target_progress": target_progress,
+                "progress_pred": progress_pred,
+                "abs_error": abs(progress_pred - target_progress),
+                "success": success,
+                "valid": valid,
+            }
+        )
+    return finalized_rows
+
+
+def _summarize_progress_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {
+            "num_samples": 0,
+            "num_episodes": 0,
+            "mae": None,
+            "rmse": None,
+            "pred_mean": None,
+            "target_mean": None,
+            "negative_delta_fraction": None,
+        }
+
+    pred = np.asarray([row["progress_pred"] for row in rows], dtype=np.float32)
+    target = np.asarray([row["target_progress"] for row in rows], dtype=np.float32)
+    errors = pred - target
+
+    negative_deltas = 0
+    total_deltas = 0
+    for episode in sorted({row["episode"] for row in rows}):
+        episode_pred = [
+            row["progress_pred"] for row in rows if row["episode"] == episode and row["valid"]
+        ]
+        if len(episode_pred) <= 1:
+            continue
+        deltas = np.diff(np.asarray(episode_pred, dtype=np.float32))
+        negative_deltas += int(np.sum(deltas < -1e-3))
+        total_deltas += int(deltas.size)
+
+    return {
+        "num_samples": int(len(rows)),
+        "num_episodes": int(len({row["episode"] for row in rows})),
+        "mae": float(np.mean(np.abs(errors))),
+        "rmse": float(np.sqrt(np.mean(np.square(errors)))),
+        "bias": float(np.mean(errors)),
+        "pred_mean": float(np.mean(pred)),
+        "pred_min": float(np.min(pred)),
+        "pred_max": float(np.max(pred)),
+        "target_mean": float(np.mean(target)),
+        "target_min": float(np.min(target)),
+        "target_max": float(np.max(target)),
+        "corr": float(np.corrcoef(target, pred)[0, 1]) if len(pred) > 1 else None,
+        "negative_delta_fraction": (
+            float(negative_deltas / total_deltas) if total_deltas > 0 else None
+        ),
+    }
+
+
+def _write_progress_curve_outputs(
+    rows: list[dict[str, Any]],
+    *,
+    output_dir: str,
+    success_only: bool,
+    target: str,
+) -> dict[str, Any]:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    csv_path = output_path / "progress_predictions.csv"
+    metrics_path = output_path / "progress_metrics.json"
+    png_path = output_path / "progress_curve.png"
+    svg_path = output_path / "progress_curve.svg"
+
+    fieldnames = [
+        "episode",
+        "env_idx",
+        "step",
+        "primitive_step",
+        "episode_length",
+        "final_primitive_step",
+        "target_progress",
+        "progress_pred",
+        "abs_error",
+        "success",
+        "valid",
+    ]
+    with csv_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    valid_rows = [row for row in rows if row["valid"]]
+    metric_rows = [row for row in valid_rows if row["success"]] if success_only else valid_rows
+    plot_path: Path | None = None
+    plot_backend: str | None = None
+
+    if rows:
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")
+            from matplotlib import pyplot as plt
+
+            plt.figure(figsize=(8, 5))
+            for episode in sorted({row["episode"] for row in metric_rows}):
+                episode_rows = [row for row in metric_rows if row["episode"] == episode]
+                if not episode_rows:
+                    continue
+                xs = [row["target_progress"] for row in episode_rows]
+                ys = [row["progress_pred"] for row in episode_rows]
+                plt.plot(xs, ys, alpha=0.18, linewidth=1.0)
+
+            if metric_rows:
+                bins = np.linspace(0.0, 1.0, 21)
+                target_values = np.asarray(
+                    [row["target_progress"] for row in metric_rows], dtype=np.float32
+                )
+                pred = np.asarray([row["progress_pred"] for row in metric_rows], dtype=np.float32)
+                bin_indices = np.clip(np.digitize(target_values, bins) - 1, 0, len(bins) - 2)
+                bin_centers = (bins[:-1] + bins[1:]) / 2.0
+                mean_pred = [
+                    float(np.mean(pred[bin_indices == idx]))
+                    if np.any(bin_indices == idx)
+                    else np.nan
+                    for idx in range(len(bin_centers))
+                ]
+                plt.plot(
+                    bin_centers,
+                    mean_pred,
+                    marker="o",
+                    linewidth=2.0,
+                    label="binned prediction mean",
+                )
+
+            plt.plot([0.0, 1.0], [0.0, 1.0], "--", linewidth=1.5, label="ideal")
+            plt.xlim(0.0, 1.0)
+            if metric_rows:
+                pred_values = np.asarray(
+                    [row["progress_pred"] for row in metric_rows], dtype=np.float32
+                )
+                y_min = float(min(0.0, np.nanmin(pred_values)))
+                y_max = float(max(1.0, np.nanmax(pred_values)))
+                margin = max(0.05, 0.05 * (y_max - y_min))
+                plt.ylim(y_min - margin, y_max + margin)
+            else:
+                plt.ylim(0.0, 1.0)
+            plt.xlabel("normalized rollout progress")
+            plt.ylabel("predicted progress")
+            plt.title(f"Progress prediction curve ({target})")
+            plt.grid(True, alpha=0.25)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(png_path, dpi=160)
+            plt.close()
+            plot_path = png_path
+            plot_backend = "matplotlib"
+        except ImportError:
+            _write_progress_curve_svg(metric_rows, svg_path)
+            plot_path = svg_path
+            plot_backend = "svg"
+
+    metrics = {
+        "csv_path": str(csv_path),
+        "metrics_path": str(metrics_path),
+        "plot_path": str(plot_path) if plot_path is not None else None,
+        "plot_backend": plot_backend,
+        "success_only": success_only,
+        "target": target,
+        "all": _summarize_progress_rows(rows),
+        "valid": _summarize_progress_rows(valid_rows),
+        "selected": _summarize_progress_rows(metric_rows),
+    }
+
+    with metrics_path.open("w") as f:
+        json.dump(metrics, f, indent=2)
+
+    print(f"Progress curve CSV saved to: {csv_path}")
+    print(f"Progress curve metrics saved to: {metrics_path}")
+    if plot_path is not None:
+        print(f"Progress curve plot saved to: {plot_path}")
+    return metrics
+
+
+def _write_progress_curve_svg(rows: list[dict[str, Any]], svg_path: Path) -> None:
+    width = 840
+    height = 560
+    margin = 64
+    plot_width = width - 2 * margin
+    plot_height = height - 2 * margin
+
+    def point(x: float, y: float) -> tuple[float, float]:
+        return margin + x * plot_width, height - margin - y * plot_height
+
+    def polyline(points: list[tuple[float, float]]) -> str:
+        return " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+
+    episode_lines = []
+    for episode in sorted({row["episode"] for row in rows}):
+        episode_rows = sorted(
+            [row for row in rows if row["episode"] == episode],
+            key=lambda row: row["step"],
+        )
+        if len(episode_rows) < 2:
+            continue
+        points = [point(row["target_progress"], row["progress_pred"]) for row in episode_rows]
+        episode_lines.append(
+            f'<polyline points="{polyline(points)}" '
+            'fill="none" stroke="#7a9cc6" stroke-width="1" opacity="0.22" />'
+        )
+
+    mean_line = ""
+    if rows:
+        bins = np.linspace(0.0, 1.0, 21)
+        target_values = np.asarray([row["target_progress"] for row in rows], dtype=np.float32)
+        pred = np.asarray([row["progress_pred"] for row in rows], dtype=np.float32)
+        bin_indices = np.clip(np.digitize(target_values, bins) - 1, 0, len(bins) - 2)
+        bin_centers = (bins[:-1] + bins[1:]) / 2.0
+        mean_points = []
+        for idx, bin_center in enumerate(bin_centers):
+            if np.any(bin_indices == idx):
+                mean_points.append(
+                    point(float(bin_center), float(np.mean(pred[bin_indices == idx])))
+                )
+        if len(mean_points) >= 2:
+            mean_line = (
+                f'<polyline points="{polyline(mean_points)}" '
+                'fill="none" stroke="#d55e00" stroke-width="3" opacity="0.95" />'
+            )
+
+    ideal_points = polyline([point(0.0, 0.0), point(1.0, 1.0)])
+    x0, y0 = point(0.0, 0.0)
+    x1, y1 = point(1.0, 1.0)
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+  <rect width="100%" height="100%" fill="white"/>
+  <line x1="{x0:.2f}" y1="{y0:.2f}" x2="{x1:.2f}" y2="{y0:.2f}" stroke="#222" stroke-width="1"/>
+  <line x1="{x0:.2f}" y1="{y0:.2f}" x2="{x0:.2f}" y2="{y1:.2f}" stroke="#222" stroke-width="1"/>
+  <polyline points="{ideal_points}" fill="none" stroke="#444" stroke-width="2" stroke-dasharray="6 6"/>
+  {"".join(episode_lines)}
+  {mean_line}
+  <text x="{width / 2:.2f}" y="30" text-anchor="middle" font-family="sans-serif" font-size="20">Progress prediction curve</text>
+  <text x="{width / 2:.2f}" y="{height - 16}" text-anchor="middle" font-family="sans-serif" font-size="14">normalized rollout progress</text>
+  <text x="18" y="{height / 2:.2f}" transform="rotate(-90 18,{height / 2:.2f})" text-anchor="middle" font-family="sans-serif" font-size="14">predicted progress</text>
+  <text x="{x1:.2f}" y="{y0 + 24:.2f}" text-anchor="middle" font-family="sans-serif" font-size="12">1.0</text>
+  <text x="{x0:.2f}" y="{y0 + 24:.2f}" text-anchor="middle" font-family="sans-serif" font-size="12">0.0</text>
+  <text x="{x0 - 10:.2f}" y="{y1 + 4:.2f}" text-anchor="end" font-family="sans-serif" font-size="12">1.0</text>
+  <text x="{x0 - 10:.2f}" y="{y0 + 4:.2f}" text-anchor="end" font-family="sans-serif" font-size="12">0.0</text>
+  <text x="{x1 - 12:.2f}" y="{y1 + 24:.2f}" text-anchor="end" font-family="sans-serif" font-size="12" fill="#444">ideal</text>
+  <text x="{x1 - 12:.2f}" y="{y1 + 44:.2f}" text-anchor="end" font-family="sans-serif" font-size="12" fill="#d55e00">binned prediction mean</text>
+</svg>
+"""
+    svg_path.write_text(svg)
+
+
 def run_rollout_gymnasium_policy(
     env_name: str,
     policy: BasePolicy,
     wrapper_configs: WrapperConfigs,
     n_episodes: int = 10,
     n_envs: int = 1,
+    progress_curve_config: ProgressCurveConfig | None = None,
 ) -> Any:
     """Run policy rollouts in parallel environments.
 
@@ -269,6 +583,8 @@ def run_rollout_gymnasium_policy(
     current_successes = [False] * n_envs
     episode_successes = []
     episode_infos = defaultdict(list)
+    progress_rows: list[dict[str, Any]] = []
+    current_progress_rows: list[list[dict[str, Any]]] = [[] for _ in range(n_envs)]
 
     # Initial reset
     observations, _ = env.reset()
@@ -277,7 +593,21 @@ def run_rollout_gymnasium_policy(
 
     pbar = tqdm(total=n_episodes, desc="Episodes")
     while completed_episodes < n_episodes:
-        actions, _ = policy.get_action(observations)
+        actions, policy_info = policy.get_action(observations)
+        progress_preds = _extract_progress_predictions(policy_info, n_envs)
+        if progress_curve_config and progress_curve_config.output_dir:
+            for env_idx, progress_pred in enumerate(progress_preds):
+                if progress_pred is None:
+                    continue
+                current_progress_rows[env_idx].append(
+                    {
+                        "env_idx": env_idx,
+                        "step": current_lengths[env_idx],
+                        "primitive_step": current_lengths[env_idx]
+                        * wrapper_configs.multistep.n_action_steps,
+                        "progress_pred": progress_pred,
+                    }
+                )
         next_obs, rewards, terminations, truncations, env_infos = env.step(actions)
         # NOTE (FY): Currently we don't properly handle policy reset. For now, our policy are stateless,
         # but in the future if we need policy to be stateful, we need to detect env reset and call policy.reset()
@@ -324,11 +654,31 @@ def run_rollout_gymnasium_policy(
                     episode_infos["task_progress"].append(env_infos["task_progress"][env_idx][-1])
                 if "q_score" in env_infos:
                     episode_infos["q_score"].append(np.max(env_infos["q_score"][env_idx]))
+                episode_valid = True
                 if "valid" in env_infos:
-                    episode_infos["valid"].append(all(env_infos["valid"][env_idx]))
+                    episode_valid = all(env_infos["valid"][env_idx])
+                    episode_infos["valid"].append(episode_valid)
                 # Accumulate results
                 episode_lengths.append(current_lengths[env_idx])
+                episode_index = len(episode_successes)
                 episode_successes.append(current_successes[env_idx])
+                if progress_curve_config and progress_curve_config.output_dir:
+                    progress_rows.extend(
+                        _finalize_progress_episode(
+                            current_progress_rows[env_idx],
+                            episode_index=episode_index,
+                            success=current_successes[env_idx],
+                            valid=episode_valid,
+                            target=progress_curve_config.target,
+                            target_offset_steps=progress_curve_config.target_offset_steps,
+                            final_primitive_step=max(
+                                current_lengths[env_idx] * wrapper_configs.multistep.n_action_steps
+                                - 1,
+                                1,
+                            ),
+                        )
+                    )
+                    current_progress_rows[env_idx] = []
                 # Reset trackers for this environment.
                 current_successes[env_idx] = False
                 # only update completed_episodes if valid
@@ -365,6 +715,14 @@ def run_rollout_gymnasium_policy(
         valid_idxs = np.where(valids)[0]
         episode_successes = [episode_successes[i] for i in valid_idxs]
         episode_infos = {k: [v[i] for i in valid_idxs] for k, v in episode_infos.items()}
+
+    if progress_curve_config and progress_curve_config.output_dir:
+        episode_infos["progress_curve"] = _write_progress_curve_outputs(
+            progress_rows,
+            output_dir=progress_curve_config.output_dir,
+            success_only=progress_curve_config.success_only,
+            target=progress_curve_config.target,
+        )
 
     return env_name, episode_successes, episode_infos
 
@@ -412,10 +770,21 @@ def run_gr00t_sim_policy(
     video_dir: str | None = None,
     trt_engine_path: str = "",
     trt_mode: TrtMode = TrtMode.N17_FULL_PIPELINE,
+    progress_curve_dir: str | None = None,
+    progress_curve_success_only: bool = False,
+    progress_curve_target: str = "current",
+    record_video: bool = True,
 ):
+    if progress_curve_target not in {"current", "chunk_end"}:
+        raise ValueError(
+            f"Unsupported progress_curve_target={progress_curve_target!r}; "
+            "expected 'current' or 'chunk_end'"
+        )
     embodiment_tag = get_embodiment_tag_from_env_name(env_name)
 
-    if video_dir is None:
+    if not record_video:
+        video_dir = None
+    elif video_dir is None:
         if model_path:
             parts = model_path.split("/")
             model_slug = parts[-3] if len(parts) >= 3 else parts[-1]
@@ -442,6 +811,16 @@ def run_gr00t_sim_policy(
         trt_engine_path=trt_engine_path,
         trt_mode=trt_mode,
     )
+    progress_target_offset_steps = 0
+    if progress_curve_target == "chunk_end":
+        modality_config = policy.get_modality_config()
+        model_action_horizon = len(modality_config["action"].delta_indices)
+        progress_target_offset_steps = max(model_action_horizon - 1, 0)
+        print(
+            "Progress curve chunk_end target uses "
+            f"model action horizon={model_action_horizon} "
+            f"(offset={progress_target_offset_steps} primitive steps)"
+        )
 
     results = run_rollout_gymnasium_policy(
         env_name=env_name,
@@ -449,6 +828,12 @@ def run_gr00t_sim_policy(
         wrapper_configs=wrapper_configs,
         n_episodes=n_episodes,
         n_envs=n_envs,
+        progress_curve_config=ProgressCurveConfig(
+            output_dir=progress_curve_dir,
+            success_only=progress_curve_success_only,
+            target=progress_curve_target,
+            target_offset_steps=progress_target_offset_steps,
+        ),
     )
     print("Video saved to: ", wrapper_configs.video.video_dir)
     return results
@@ -491,6 +876,18 @@ class RolloutConfig:
     trt_mode: TrtMode = TrtMode.N17_FULL_PIPELINE
     """TRT mode: 'n17_full_pipeline' (all engines), 'vit_llm_only', or 'action_head'."""
 
+    progress_curve_dir: str | None = None
+    """Directory to save progress prediction CSV, metrics JSON, and curve PNG."""
+
+    progress_curve_success_only: bool = False
+    """If true, compute the plotted/selected progress metrics only on successful valid episodes."""
+
+    progress_curve_target: str = "current"
+    """Progress target used for the curve: 'current' or 'chunk_end'."""
+
+    record_video: bool = True
+    """Whether to record rollout videos."""
+
 
 if __name__ == "__main__":
     args = tyro.cli(RolloutConfig)
@@ -517,6 +914,10 @@ if __name__ == "__main__":
         video_dir=args.video_dir,
         trt_engine_path=args.trt_engine_path,
         trt_mode=args.trt_mode,
+        progress_curve_dir=args.progress_curve_dir,
+        progress_curve_success_only=args.progress_curve_success_only,
+        progress_curve_target=args.progress_curve_target,
+        record_video=args.record_video,
     )
     print("results: ", results)
     print("success rate: ", np.mean(results[1]))

@@ -80,6 +80,25 @@ class Gr00tN1d7ActionHead(nn.Module):
             hidden_dim=self.hidden_size,
             output_dim=self.action_dim,
         )
+        self.enable_progress_head = config.enable_progress_head
+        self.progress_loss_weight = config.progress_loss_weight
+        self.isolate_progress_action_attention = getattr(
+            config, "isolate_progress_action_attention", False
+        )
+        if self.enable_progress_head:
+            self.progress_token = nn.Parameter(torch.empty(1, 1, self.input_embedding_dim))
+            nn.init.normal_(self.progress_token, mean=0.0, std=1.0)
+            self.progress_token_scale = 0.02
+            self.progress_head = nn.Sequential(
+                nn.LayerNorm(self.hidden_size),
+                nn.Linear(self.hidden_size, self.hidden_size),
+                nn.GELU(),
+                nn.Linear(self.hidden_size, 1),
+            )
+            nn.init.xavier_uniform_(self.progress_head[1].weight)
+            nn.init.zeros_(self.progress_head[1].bias)
+            nn.init.zeros_(self.progress_head[3].weight)
+            nn.init.zeros_(self.progress_head[3].bias)
 
         self.vlln = (
             nn.LayerNorm(config.backbone_embedding_dim) if config.use_vlln else nn.Identity()
@@ -101,15 +120,24 @@ class Gr00tN1d7ActionHead(nn.Module):
         self.beta_dist = Beta(config.noise_beta_alpha, config.noise_beta_beta)
         self.num_timestep_buckets = config.num_timestep_buckets
         self.set_trainable_parameters(
-            config.tune_projector, config.tune_diffusion_model, config.tune_vlln
+            config.tune_projector,
+            config.tune_diffusion_model,
+            config.tune_vlln,
+            config.tune_progress_head,
         )
 
     def set_trainable_parameters(
-        self, tune_projector: bool, tune_diffusion_model: bool, tune_vlln: bool
+        self,
+        tune_projector: bool,
+        tune_diffusion_model: bool,
+        tune_vlln: bool,
+        tune_progress_head: bool = True,
     ):
         self.tune_projector = tune_projector
         self.tune_diffusion_model = tune_diffusion_model
         self.tune_vlln = tune_vlln
+        self.tune_progress_head = tune_progress_head
+        self.optimize_action_loss = tune_projector or tune_diffusion_model or tune_vlln
         for p in self.parameters():
             p.requires_grad = True
         if not tune_projector:
@@ -123,11 +151,20 @@ class Gr00tN1d7ActionHead(nn.Module):
         if not tune_vlln:
             self.vlln.requires_grad_(False)
             self.vl_self_attention.requires_grad_(False)
+        if self.enable_progress_head and not tune_progress_head:
+            self.progress_token.requires_grad_(False)
+            self.progress_head.requires_grad_(False)
         logger.debug(f"Tune action head projector: {self.tune_projector}")
         logger.debug(f"Tune action head diffusion model: {self.tune_diffusion_model}")
         logger.debug(f"Tune action head vlln: {self.tune_vlln}")
+        logger.debug(f"Tune progress head: {self.tune_progress_head}")
         # Check if any parameters are still trainable. If not, log a warning.
-        if not tune_projector and not tune_diffusion_model and not tune_vlln:
+        if (
+            not tune_projector
+            and not tune_diffusion_model
+            and not tune_vlln
+            and (not self.enable_progress_head or not tune_progress_head)
+        ):
             for name, p in self.named_parameters():
                 if p.requires_grad:
                     logger.debug(f"Action head trainable parameter: {name}")
@@ -152,6 +189,8 @@ class Gr00tN1d7ActionHead(nn.Module):
             if not self.tune_vlln:
                 self.vlln.eval()
                 self.vl_self_attention.eval()
+            if self.enable_progress_head and not self.tune_progress_head:
+                self.progress_head.eval()
 
     def sample_time(self, batch_size, device, dtype):
         sample = self.beta_dist.sample([batch_size]).to(device, dtype=dtype)
@@ -164,6 +203,64 @@ class Gr00tN1d7ActionHead(nn.Module):
         backbone_features = self.vl_self_attention(backbone_features)
         backbone_output["backbone_features"] = backbone_features
         return backbone_output
+
+    def _make_progress_features(
+        self,
+        batch_size: int,
+        position_index: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        bounded_token = torch.tanh(self.progress_token.float()) * self.progress_token_scale
+        progress_features = bounded_token.to(device=device, dtype=dtype).expand(batch_size, -1, -1)
+        if self.config.add_pos_embed:
+            pos_id = torch.tensor([position_index], dtype=torch.long, device=device)
+            progress_features = progress_features + self.position_embedding(pos_id).unsqueeze(0)
+        return progress_features
+
+    def _make_self_attention_mask(
+        self,
+        batch_size: int,
+        seq_len: int,
+        progress_index: int | None,
+        action_start: int,
+        action_end: int,
+        device: torch.device,
+    ) -> torch.Tensor | None:
+        if (
+            not self.enable_progress_head
+            or not self.isolate_progress_action_attention
+            or progress_index is None
+        ):
+            return None
+
+        attention_mask = torch.ones(batch_size, seq_len, seq_len, dtype=torch.bool, device=device)
+        # Preserve the original state/action path by preventing those tokens
+        # from reading the auxiliary progress token. The progress token reads
+        # state and itself only, not action tokens.
+        attention_mask[:, :progress_index, progress_index] = False
+        attention_mask[:, progress_index, action_start:action_end] = False
+        attention_mask[:, action_start:action_end, progress_index] = False
+        return attention_mask
+
+    def _predict_progress(self, progress_hidden: torch.Tensor) -> torch.Tensor:
+        progress_head_dtype = next(self.progress_head.parameters()).dtype
+        device_type = progress_hidden.device.type
+        with torch.autocast(device_type=device_type, enabled=False):
+            progress_hidden = torch.nan_to_num(
+                progress_hidden.float(),
+                nan=0.0,
+                posinf=1e4,
+                neginf=-1e4,
+            ).to(dtype=progress_head_dtype)
+            progress_pred = self.progress_head(progress_hidden)
+            progress_pred = torch.nan_to_num(
+                progress_pred.float(),
+                nan=0.0,
+                posinf=30.0,
+                neginf=-30.0,
+            )
+            return torch.sigmoid(progress_pred).squeeze(-1)
 
     def forward(self, backbone_output: BatchFeature, action_input: BatchFeature) -> BatchFeature:
         """
@@ -230,8 +327,31 @@ class Gr00tN1d7ActionHead(nn.Module):
             pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
             action_features = action_features + pos_embs
 
-        # Join vision, language, state and action embedding along sequence dimension.
-        sa_embs = torch.cat((state_features, action_features), dim=1)
+        # Join state, action tokens, and optional auxiliary progress token.
+        # The Progress Token is appended after action tokens so the frozen
+        # action path keeps the same token positions as the original model.
+        action_start = state_features.shape[1]
+        action_end = action_start + actions.shape[1]
+        progress_index = None
+        if self.enable_progress_head:
+            progress_index = action_end
+            progress_features = self._make_progress_features(
+                batch_size=actions.shape[0],
+                position_index=action_features.shape[1],
+                device=device,
+                dtype=action_features.dtype,
+            )
+            sa_embs = torch.cat((state_features, action_features, progress_features), dim=1)
+        else:
+            sa_embs = torch.cat((state_features, action_features), dim=1)
+        self_attention_mask = self._make_self_attention_mask(
+            batch_size=actions.shape[0],
+            seq_len=sa_embs.shape[1],
+            progress_index=progress_index,
+            action_start=action_start,
+            action_end=action_end,
+            device=device,
+        )
         vl_attn_mask = backbone_output.backbone_attention_mask
 
         if self.config.use_alternate_vl_dit:
@@ -240,6 +360,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             model_output, _ = self.model(
                 hidden_states=sa_embs,
                 encoder_hidden_states=vl_embeds,
+                attention_mask=self_attention_mask,
                 encoder_attention_mask=vl_attn_mask,
                 timestep=t_discretized,
                 return_all_hidden_states=True,
@@ -250,26 +371,44 @@ class Gr00tN1d7ActionHead(nn.Module):
             model_output, _ = self.model(
                 hidden_states=sa_embs,
                 encoder_hidden_states=vl_embeds,
+                attention_mask=self_attention_mask,
                 encoder_attention_mask=vl_attn_mask,
                 timestep=t_discretized,
                 return_all_hidden_states=True,
             )
 
-        pred = self.action_decoder(model_output, embodiment_id)
-        pred_actions = pred[:, -actions.shape[1] :]
+        pred_actions = self.action_decoder(model_output[:, action_start:action_end], embodiment_id)
 
         # Slice out only the action portion of pred and target.
         action_mask = action_input.action_mask
         action_loss = F.mse_loss(pred_actions, velocity, reduction="none") * action_mask
         loss = action_loss.sum() / (action_mask.sum() + 1e-6)
-
-        return {
-            "loss": loss,
+        output_loss = loss if self.optimize_action_loss else loss.detach()
+        output = {
+            "loss": output_loss,
             "action_loss": action_loss,
             "action_mask": action_mask,
             "backbone_features": vl_embeds,
             "state_features": state_features,
         }
+
+        if self.enable_progress_head:
+            progress_pred = self._predict_progress(model_output[:, progress_index])
+            output["progress_pred"] = progress_pred
+            if "progress" in action_input:
+                progress_target = action_input.progress.to(
+                    device=progress_pred.device,
+                    dtype=progress_pred.dtype,
+                ).view_as(progress_pred)
+                progress_target = progress_target.clamp(0.0, 1.0)
+                progress_loss = F.mse_loss(progress_pred, progress_target)
+                output["progress_loss"] = progress_loss
+                if self.optimize_action_loss:
+                    output["loss"] = loss + self.progress_loss_weight * progress_loss
+                else:
+                    output["loss"] = self.progress_loss_weight * progress_loss
+
+        return output
 
     def _encode_features(
         self, backbone_output: BatchFeature, action_input: BatchFeature
@@ -395,14 +534,36 @@ class Gr00tN1d7ActionHead(nn.Module):
                 pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
                 action_features = action_features + pos_embs
 
-            # Join vision, language, state and action embedding along sequence dimension.
-            sa_embs = torch.cat((state_features, action_features), dim=1)
+            # Join state, action tokens, and optional auxiliary progress token.
+            action_start = state_features.shape[1]
+            action_end = action_start + self.action_horizon
+            progress_index = None
+            if self.enable_progress_head:
+                progress_index = action_end
+                progress_features = self._make_progress_features(
+                    batch_size=batch_size,
+                    position_index=action_features.shape[1],
+                    device=device,
+                    dtype=action_features.dtype,
+                )
+                sa_embs = torch.cat((state_features, action_features, progress_features), dim=1)
+            else:
+                sa_embs = torch.cat((state_features, action_features), dim=1)
+            self_attention_mask = self._make_self_attention_mask(
+                batch_size=batch_size,
+                seq_len=sa_embs.shape[1],
+                progress_index=progress_index,
+                action_start=action_start,
+                action_end=action_end,
+                device=device,
+            )
 
             # Run model forward.
             if self.config.use_alternate_vl_dit:
                 model_output = self.model(
                     hidden_states=sa_embs,
                     encoder_hidden_states=vl_embeds,
+                    attention_mask=self_attention_mask,
                     timestep=timesteps_tensor,
                     image_mask=backbone_output.image_mask,
                     backbone_attention_mask=backbone_output.backbone_attention_mask,
@@ -411,22 +572,27 @@ class Gr00tN1d7ActionHead(nn.Module):
                 model_output = self.model(
                     hidden_states=sa_embs,
                     encoder_hidden_states=vl_embeds,
+                    attention_mask=self_attention_mask,
                     timestep=timesteps_tensor,
                 )
-            pred = self.action_decoder(model_output, embodiment_id)
-
-            pred_velocity = pred[:, -self.action_horizon :]
+            pred_velocity = self.action_decoder(
+                model_output[:, action_start:action_end],
+                embodiment_id,
+            )
+            if self.enable_progress_head:
+                progress_pred = self._predict_progress(model_output[:, progress_index])
 
             # Update actions using euler integration.
             actions = actions + dt * pred_velocity * vel_strength
 
-        return BatchFeature(
-            data={
-                "action_pred": actions,
-                "backbone_features": vl_embeds,
-                "state_features": state_features,
-            }
-        )
+        output = {
+            "action_pred": actions,
+            "backbone_features": vl_embeds,
+            "state_features": state_features,
+        }
+        if self.enable_progress_head:
+            output["progress_pred"] = progress_pred
+        return BatchFeature(data=output)
 
     @torch.no_grad()
     def get_action(

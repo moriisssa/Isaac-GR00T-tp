@@ -87,6 +87,9 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 tune_diffusion_model=self.config.model.tune_diffusion_model,
                 tune_vlln=self.config.model.tune_vlln,
                 state_dropout_prob=self.config.model.state_dropout_prob,
+                enable_progress_head=self.config.model.enable_progress_head,
+                tune_progress_head=self.config.model.tune_progress_head,
+                progress_loss_weight=self.config.model.progress_loss_weight,
                 backbone_trainable_params_fp32=self.config.model.backbone_trainable_params_fp32,
                 load_bf16=self.config.model.load_bf16,
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
@@ -96,7 +99,11 @@ class Gr00tN1d7Pipeline(ModelPipeline):
 
             missing_keys = loading_info.get("missing_keys", [])
             mask_token_missing = any("mask_token" in key for key in missing_keys)
-            if mask_token_missing and model.action_head.mask_token is not None:
+            if (
+                mask_token_missing
+                and hasattr(model.action_head, "mask_token")
+                and model.action_head.mask_token is not None
+            ):
                 with torch.no_grad():
                     model.action_head.mask_token.data.copy_(
                         0.02 * torch.randn_like(model.action_head.mask_token)
@@ -105,12 +112,58 @@ class Gr00tN1d7Pipeline(ModelPipeline):
 
             unexpected_keys = loading_info.get("unexpected_keys", [])
             mismatched_keys = loading_info.get("mismatched_keys", [])
-            other_missing = [k for k in missing_keys if "mask_token" not in k]
+            allowed_missing_prefixes = ["action_head.mask_token"]
+            if self.config.model.enable_progress_head:
+                allowed_missing_prefixes.extend(
+                    [
+                        "action_head.progress_token",
+                        "action_head.progress_head",
+                    ]
+                )
+            other_missing = [
+                k
+                for k in missing_keys
+                if not any(k.startswith(prefix) for prefix in allowed_missing_prefixes)
+            ]
+            progress_missing = [
+                k
+                for k in missing_keys
+                if k.startswith("action_head.progress_token")
+                or k.startswith("action_head.progress_head")
+            ]
+            if progress_missing:
+                logging.info(
+                    "Progress head parameters not found in checkpoint - initialized: "
+                    f"{progress_missing}"
+                )
+            allowed_unexpected_prefixes = []
+            if self.config.model.enable_progress_head:
+                allowed_unexpected_prefixes.extend(
+                    [
+                        "action_head.progress_token",
+                        "action_head.progress_head",
+                    ]
+                )
+            progress_unexpected = [
+                k
+                for k in unexpected_keys
+                if any(k.startswith(prefix) for prefix in allowed_unexpected_prefixes)
+            ]
+            if progress_unexpected:
+                logging.info(
+                    "Ignoring progress head parameters from checkpoint that do not match "
+                    f"the current architecture: {progress_unexpected}"
+                )
+            other_unexpected = [
+                k
+                for k in unexpected_keys
+                if not any(k.startswith(prefix) for prefix in allowed_unexpected_prefixes)
+            ]
             errors = []
             if other_missing:
                 errors.append(f"Missing keys ({len(other_missing)}): {other_missing}")
-            if unexpected_keys:
-                errors.append(f"Unexpected keys ({len(unexpected_keys)}): {unexpected_keys}")
+            if other_unexpected:
+                errors.append(f"Unexpected keys ({len(other_unexpected)}): {other_unexpected}")
             if mismatched_keys:
                 errors.append(f"Mismatched keys ({len(mismatched_keys)}): {mismatched_keys}")
             if errors:

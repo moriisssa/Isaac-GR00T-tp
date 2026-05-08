@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Test Gr00tN1d7ActionHead: flow matching forward, get_action, feature encoding.
@@ -20,11 +8,12 @@ These tests instantiate the action head directly (no backbone required)
 and feed it synthetic backbone output tensors.
 """
 
-from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
-from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7ActionHead
 import pytest
 import torch
 from transformers.feature_extraction_utils import BatchFeature
+
+from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
+from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7ActionHead
 
 
 def _small_config(**overrides) -> Gr00tN1d7Config:
@@ -87,14 +76,15 @@ def _make_backbone_output(config, batch_size=2, seq_len=8):
 
 
 def _make_action_input(config, batch_size=2):
-    return BatchFeature(
-        data={
-            "state": torch.randn(batch_size, config.state_history_length, config.max_state_dim),
-            "action": torch.randn(batch_size, config.action_horizon, config.max_action_dim),
-            "embodiment_id": torch.zeros(batch_size, dtype=torch.long),
-            "action_mask": torch.ones(batch_size, config.action_horizon, config.max_action_dim),
-        }
-    )
+    data = {
+        "state": torch.randn(batch_size, config.state_history_length, config.max_state_dim),
+        "action": torch.randn(batch_size, config.action_horizon, config.max_action_dim),
+        "embodiment_id": torch.zeros(batch_size, dtype=torch.long),
+        "action_mask": torch.ones(batch_size, config.action_horizon, config.max_action_dim),
+    }
+    if config.enable_progress_head:
+        data["progress"] = torch.linspace(0.0, 1.0, batch_size)
+    return BatchFeature(data=data)
 
 
 class TestActionHeadForward:
@@ -121,14 +111,174 @@ class TestActionHeadForward:
         out = head.forward(_make_backbone_output(config), _make_action_input(config))
         assert torch.isfinite(out["loss"])
 
+    def test_forward_with_progress_head(self):
+        config = _small_config(enable_progress_head=True, progress_loss_weight=0.2)
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+        assert "progress_pred" in out
+        assert "progress_loss" in out
+        assert out["progress_pred"].shape == (2,)
+        assert torch.allclose(out["progress_pred"], torch.full_like(out["progress_pred"], 0.5))
+        assert torch.isfinite(out["loss"])
+
+    def test_forward_with_progress_head_and_alternate_vl_dit(self):
+        config = _small_config(enable_progress_head=True, use_alternate_vl_dit=True)
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+        assert "progress_pred" in out
+        assert out["progress_pred"].shape == (2,)
+        assert torch.isfinite(out["loss"])
+
+    def test_progress_only_training_loss_excludes_action_loss(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_loss_weight=0.2,
+            tune_projector=False,
+            tune_diffusion_model=False,
+            tune_vlln=False,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        assert torch.allclose(out["loss"], out["progress_loss"] * config.progress_loss_weight)
+
+    def test_progress_token_features_are_bounded(self):
+        config = _small_config(enable_progress_head=True, add_pos_embed=False)
+        head = Gr00tN1d7ActionHead(config)
+        head.progress_token.data.fill_(1e6)
+
+        features = head._make_progress_features(
+            batch_size=2,
+            position_index=0,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+
+        assert features.abs().max() <= head.progress_token_scale
+
+    def test_progress_head_outputs_sigmoid_value(self):
+        config = _small_config(enable_progress_head=True)
+        head = Gr00tN1d7ActionHead(config)
+        progress_hidden = torch.randn(2, config.hidden_size)
+
+        with torch.no_grad():
+            head.progress_head[3].weight.zero_()
+            head.progress_head[3].bias.fill_(2.0)
+
+        progress_pred = head._predict_progress(progress_hidden)
+        assert torch.allclose(
+            progress_pred,
+            torch.full_like(progress_pred, torch.sigmoid(torch.tensor(2.0))),
+        )
+        assert torch.all((progress_pred >= 0.0) & (progress_pred <= 1.0))
+
+    def test_progress_token_is_appended_after_action_tokens(self):
+        class ConstantStateEncoder(torch.nn.Module):
+            def forward(self, state, embodiment_id):
+                return torch.ones(
+                    state.shape[0],
+                    1,
+                    config.input_embedding_dim,
+                    device=state.device,
+                    dtype=state.dtype,
+                )
+
+        class ConstantActionEncoder(torch.nn.Module):
+            def forward(self, action, timestep, embodiment_id):
+                return torch.full(
+                    (action.shape[0], config.action_horizon, config.input_embedding_dim),
+                    2.0,
+                    device=action.device,
+                    dtype=action.dtype,
+                )
+
+        class IdentityBackboneAttention(torch.nn.Module):
+            def forward(self, backbone_features):
+                return backbone_features
+
+        class CaptureModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.hidden_states = None
+                self.attention_mask = None
+
+            def forward(self, hidden_states, **kwargs):
+                self.hidden_states = hidden_states.detach().clone()
+                self.attention_mask = kwargs.get("attention_mask")
+                return hidden_states, None
+
+        class CaptureActionDecoder(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.hidden_states = None
+
+            def forward(self, hidden_states, embodiment_id):
+                self.hidden_states = hidden_states.detach().clone()
+                return torch.zeros(
+                    hidden_states.shape[0],
+                    hidden_states.shape[1],
+                    config.max_action_dim,
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+
+        config = _small_config(enable_progress_head=True, add_pos_embed=False)
+        head = Gr00tN1d7ActionHead(config)
+        head.state_encoder = ConstantStateEncoder()
+        head.action_encoder = ConstantActionEncoder()
+        head.vl_self_attention = IdentityBackboneAttention()
+        head.model = CaptureModel()
+        head.action_decoder = CaptureActionDecoder()
+
+        head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        hidden_states = head.model.hidden_states
+        assert hidden_states.shape[1] == 1 + config.action_horizon + 1
+        assert torch.allclose(hidden_states[:, :1], torch.ones_like(hidden_states[:, :1]))
+        assert torch.allclose(
+            hidden_states[:, 1 : 1 + config.action_horizon],
+            torch.full_like(hidden_states[:, 1 : 1 + config.action_horizon], 2.0),
+        )
+        assert torch.allclose(
+            hidden_states[:, -1:],
+            head._make_progress_features(
+                batch_size=hidden_states.shape[0],
+                position_index=config.action_horizon,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            ),
+        )
+        assert torch.allclose(
+            head.action_decoder.hidden_states,
+            hidden_states[:, 1 : 1 + config.action_horizon],
+        )
+
+        attention_mask = head.model.attention_mask
+        assert attention_mask.shape == (
+            hidden_states.shape[0],
+            hidden_states.shape[1],
+            hidden_states.shape[1],
+        )
+        progress_index = 1 + config.action_horizon
+        action_start = 1
+        action_end = progress_index
+        assert attention_mask[:, :progress_index, :progress_index].all()
+        assert not attention_mask[:, :progress_index, progress_index].any()
+        assert attention_mask[:, progress_index, :action_start].all()
+        assert not attention_mask[:, progress_index, action_start:action_end].any()
+        assert attention_mask[:, progress_index, progress_index].all()
+
 
 class TestActionHeadGetAction:
-    """Test inference (denoising loop)."""
+    """Test inference denoising loop."""
 
     def test_get_action_output_shape(self, action_head):
         head, config = action_head
         action_input = _make_action_input(config)
-        del action_input["action"]  # get_action doesn't need ground-truth action
+        del action_input["action"]
         out = head.get_action(_make_backbone_output(config), action_input)
         assert "action_pred" in out
         assert out["action_pred"].shape == (2, config.action_horizon, config.max_action_dim)
@@ -149,6 +299,19 @@ class TestActionHeadGetAction:
             action_input,
         )
         assert out["action_pred"].shape[0] == 1
+
+    def test_get_action_with_progress_head(self):
+        config = _small_config(enable_progress_head=True)
+        head = Gr00tN1d7ActionHead(config)
+        head.eval()
+        action_input = _make_action_input(config, batch_size=1)
+        del action_input["action"]
+        out = head.get_action(
+            _make_backbone_output(config, batch_size=1),
+            action_input,
+        )
+        assert out["progress_pred"].shape == (1,)
+        assert torch.all((out["progress_pred"] >= 0.0) & (out["progress_pred"] <= 1.0))
 
 
 class TestActionHeadEncodeFeatures:
@@ -180,6 +343,8 @@ class TestActionHeadTrainableParams:
             assert not p.requires_grad
         for p in head.action_encoder.parameters():
             assert not p.requires_grad
+        for p in head.action_decoder.parameters():
+            assert not p.requires_grad
 
     def test_freeze_diffusion(self):
         config = _small_config()
@@ -187,3 +352,26 @@ class TestActionHeadTrainableParams:
         head.set_trainable_parameters(True, False, True)
         for p in head.model.parameters():
             assert not p.requires_grad
+
+    def test_progress_only_leaves_only_progress_params_trainable(self):
+        config = _small_config(
+            enable_progress_head=True,
+            tune_projector=False,
+            tune_diffusion_model=False,
+            tune_vlln=False,
+            tune_progress_head=True,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        trainable = {name for name, p in head.named_parameters() if p.requires_grad}
+
+        assert trainable
+        assert all(
+            name.startswith("progress_token") or name.startswith("progress_head")
+            for name in trainable
+        )
+
+    def test_freeze_progress_head(self):
+        config = _small_config(enable_progress_head=True, tune_progress_head=False)
+        head = Gr00tN1d7ActionHead(config)
+        assert not head.progress_token.requires_grad
+        assert not any(p.requires_grad for p in head.progress_head.parameters())

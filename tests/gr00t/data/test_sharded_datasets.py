@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, patch
 from gr00t.data.dataset.sharded_mixture_dataset import ShardedMixtureDataset, merge_statistics
 from gr00t.data.interfaces import ShardedDataset
 import numpy as np
+import pandas as pd
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +216,26 @@ class TestShardedMixtureDataset:
             )
         processor.set_statistics.assert_called_once()
 
+    def test_small_training_schedule_still_assigns_worker_shard(self):
+        datasets = [MockShardedDataset("/fake/path_0")]
+        processor = MagicMock()
+        processor.set_statistics = MagicMock()
+        with (
+            patch("torch.distributed.is_initialized", return_value=True),
+            patch("torch.distributed.get_rank", return_value=3),
+            patch("torch.distributed.get_world_size", return_value=4),
+        ):
+            mixture = ShardedMixtureDataset(
+                datasets=datasets,
+                weights=[1.0],
+                processor=processor,
+                seed=42,
+                training=True,
+                num_shards_per_epoch=1,
+            )
+
+        assert len(mixture.filter_shard_sample_schedule()) == 1
+
 
 # ---------------------------------------------------------------------------
 # ShardedSingleStepDataset tests (with mocked episode loader)
@@ -289,3 +310,27 @@ class TestShardedSingleStepDataset:
 
         # effective = 50 - 8 + 1 = 43
         assert dataset.get_effective_episode_length(0) == 43
+
+    def test_progress_label_from_timestamp(self):
+        from gr00t.data.dataset.sharded_single_step_dataset import compute_progress_label
+
+        episode_data = pd.DataFrame(
+            {
+                "timestamp": [0.0, 0.5, 1.0, 1.5, 2.0],
+                "frame_index": [0, 1, 2, 3, 4],
+            }
+        )
+        progress = compute_progress_label(episode_data, step_index=2)
+        np.testing.assert_allclose(progress, np.array([0.5], dtype=np.float32))
+
+    def test_progress_label_chunk_end(self):
+        from gr00t.data.dataset.sharded_single_step_dataset import compute_progress_label
+
+        episode_data = pd.DataFrame({"frame_index": [0, 1, 2, 3, 4]})
+        progress = compute_progress_label(
+            episode_data,
+            step_index=1,
+            action_horizon=3,
+            target="chunk_end",
+        )
+        np.testing.assert_allclose(progress, np.array([0.75], dtype=np.float32))

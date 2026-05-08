@@ -343,9 +343,15 @@ class ShardedMixtureDataset(IterableDataset):
                 "Worker ID or number of workers has been changed since it was set. This is not allowed."
             )
 
+        total_workers = self.world_size * num_workers
+        schedule = self.shard_sampling_schedule
+        if self.training and len(schedule) < total_workers:
+            repeats = int(np.ceil(total_workers / max(len(schedule), 1)))
+            schedule = (schedule * repeats)[:total_workers]
+
         # Distribute shards across all workers in all processes
-        for i, shard in enumerate(self.shard_sampling_schedule):
-            if i % (self.world_size * num_workers) == self.rank * num_workers + worker_id:
+        for i, shard in enumerate(schedule):
+            if i % total_workers == self.rank * num_workers + worker_id:
                 filtered_schedule.append(shard)
         return filtered_schedule
 

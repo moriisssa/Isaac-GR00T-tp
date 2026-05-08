@@ -129,7 +129,10 @@ class Gr00tN1d7DataCollator:
                 raise Exception("Not implemented")
             else:
                 # state, state_mask, action and action_mask - stack to form batch dimension
-                batch[key] = torch.from_numpy(np.stack(values))
+                if isinstance(values[0], torch.Tensor):
+                    batch[key] = torch.stack(values)
+                else:
+                    batch[key] = torch.from_numpy(np.stack(values))
         return BatchFeature(data={"inputs": batch})
 
     def __str__(self):
@@ -591,6 +594,11 @@ class Gr00tN1d7Processor(BaseProcessor):
         transformed_inputs = {
             "state": normalized_states.to(torch.get_default_dtype()),
         }
+        if "progress" in content.metadata:
+            transformed_inputs["progress"] = torch.as_tensor(
+                content.metadata["progress"],
+                dtype=torch.get_default_dtype(),
+            ).reshape(1)
         if normalized_actions is not None:
             transformed_inputs["action"] = normalized_actions.to(torch.get_default_dtype())
         # Add VLM inputs
