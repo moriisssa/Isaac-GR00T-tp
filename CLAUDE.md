@@ -10,6 +10,84 @@ The repo contains the model, training pipeline, evaluation harness, and deployme
 - **Build system:** setuptools (see `pyproject.toml`)
 - **CI:** internal GitLab CI (`.gitlab-ci.yml` + includes under `ci/`, not shipped to the public GitHub EA repo); public GitHub Actions (`.github/workflows/`)
 
+## Agent behavior guidelines
+
+These guidelines reduce common LLM coding mistakes and should be merged with project-specific
+instructions when they overlap. They bias toward caution over speed; use judgment for trivial tasks.
+
+### 1. Think before coding
+
+Do not assume, hide confusion, or skip tradeoffs.
+
+Before implementing:
+
+- State assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them instead of choosing silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop, name what is confusing, and ask.
+
+### 2. Simplicity first
+
+Write the minimum code that solves the problem. Do not add speculative behavior.
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No flexibility or configurability that was not requested.
+- No error handling for impossible scenarios.
+- If 200 lines could be 50, rewrite it.
+
+Ask: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical changes
+
+Touch only what is necessary. Clean up only changes introduced by the current work.
+
+When editing existing code:
+
+- Do not improve adjacent code, comments, or formatting.
+- Do not refactor things that are not broken.
+- Match existing style, even if another style seems preferable.
+- If unrelated dead code is noticed, mention it instead of deleting it.
+
+When changes create unused code:
+
+- Remove imports, variables, functions, or files made unused by the current changes.
+- Do not remove pre-existing dead code unless asked.
+
+Every changed line should trace directly to the user's request.
+
+### 4. Goal-driven execution
+
+Define success criteria and loop until verified.
+
+Transform tasks into verifiable goals:
+
+- "Add validation" -> "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" -> "Write a test that reproduces it, then make it pass"
+- "Refactor X" -> "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+
+```text
+1. [Step] -> verify: [check]
+2. [Step] -> verify: [check]
+3. [Step] -> verify: [check]
+```
+
+Strong success criteria allow independent progress. Weak criteria, such as "make it work", require
+clarification.
+
+### 5. Commit completed code changes
+
+After each completed code change, create one git commit for that change.
+
+- Stage only files directly related to the completed change.
+- Do not include unrelated worktree changes in the commit.
+- Keep the commit message concise and specific to the change.
+
+These guidelines are working when diffs contain fewer unnecessary changes, fewer rewrites are needed
+because of overcomplication, and clarifying questions happen before implementation mistakes.
+
 ## Quick-start commands
 
 ```bash
