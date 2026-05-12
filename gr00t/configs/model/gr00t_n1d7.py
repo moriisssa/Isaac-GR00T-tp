@@ -119,14 +119,14 @@ class Gr00tN1d7Config(PretrainedConfig):
     exclude_state: bool = False  # Zero out all state inputs (ablation)
     use_mean_std: bool = False  # Use mean/std normalization instead of min/max
 
-    # Auxiliary task-progress prediction.  When enabled, the action head appends
-    # a learned progress token after the action tokens and predicts normalized
-    # task progress from that token while keeping diffusion action denoising
-    # unchanged. Labels are normalized to [0, 1], and the MLP prediction head
-    # is sigmoid-clamped to the same range. By default, state/action tokens cannot see the
-    # Progress Token, and the Progress Token only sees itself and state tokens.
+    # Auxiliary task-progress prediction.  When enabled, the action head can
+    # either append a learned progress token after action tokens ("action") or
+    # append a learned query to the vision-language features only ("vlm").
+    # Labels are normalized to [0, 1], and the MLP prediction head is
+    # sigmoid-clamped to the same range.
     enable_progress_head: bool = False
     progress_loss_weight: float = 0.1
+    progress_head_source: str = "action"
     isolate_progress_action_attention: bool = False
 
     # Multi-embodiment parameters

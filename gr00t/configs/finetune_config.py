@@ -80,6 +80,12 @@ class FinetuneConfig:
     progress_loss_weight: float = 0.1
     """Weight for the auxiliary progress regression loss."""
 
+    progress_head_source: str = "action"
+    """
+    Progress feature source. Use "action" to read progress from the diffusion
+    token path, or "vlm" to read it from a vision-language-only query token.
+    """
+
     isolate_progress_action_attention: bool = False
     """
     If True, keep state/action token self-attention equivalent to the original GR00T path

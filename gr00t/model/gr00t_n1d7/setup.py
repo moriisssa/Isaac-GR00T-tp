@@ -90,6 +90,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 enable_progress_head=self.config.model.enable_progress_head,
                 tune_progress_head=self.config.model.tune_progress_head,
                 progress_loss_weight=self.config.model.progress_loss_weight,
+                progress_head_source=self.config.model.progress_head_source,
                 backbone_trainable_params_fp32=self.config.model.backbone_trainable_params_fp32,
                 load_bf16=self.config.model.load_bf16,
                 transformers_loading_kwargs=self.transformers_loading_kwargs,

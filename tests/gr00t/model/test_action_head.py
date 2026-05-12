@@ -8,12 +8,11 @@ These tests instantiate the action head directly (no backbone required)
 and feed it synthetic backbone output tensors.
 """
 
+from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
+from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7ActionHead
 import pytest
 import torch
 from transformers.feature_extraction_utils import BatchFeature
-
-from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
-from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7ActionHead
 
 
 def _small_config(**overrides) -> Gr00tN1d7Config:
@@ -257,19 +256,54 @@ class TestActionHeadForward:
         )
 
         attention_mask = head.model.attention_mask
-        assert attention_mask.shape == (
-            hidden_states.shape[0],
-            hidden_states.shape[1],
-            hidden_states.shape[1],
+        assert attention_mask is None
+
+    def test_vlm_progress_head_does_not_append_progress_to_action_tokens(self):
+        class CaptureBackboneAttention(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.hidden_states = []
+
+            def forward(self, backbone_features):
+                self.hidden_states.append(backbone_features.detach().clone())
+                return backbone_features
+
+        class CaptureModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.hidden_states = None
+
+            def forward(self, hidden_states, **kwargs):
+                self.hidden_states = hidden_states.detach().clone()
+                return hidden_states, None
+
+        class CaptureActionDecoder(torch.nn.Module):
+            def forward(self, hidden_states, embodiment_id):
+                return torch.zeros(
+                    hidden_states.shape[0],
+                    hidden_states.shape[1],
+                    config.max_action_dim,
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="vlm",
+            add_pos_embed=False,
         )
-        progress_index = 1 + config.action_horizon
-        action_start = 1
-        action_end = progress_index
-        assert attention_mask[:, :progress_index, :progress_index].all()
-        assert not attention_mask[:, :progress_index, progress_index].any()
-        assert attention_mask[:, progress_index, :action_start].all()
-        assert not attention_mask[:, progress_index, action_start:action_end].any()
-        assert attention_mask[:, progress_index, progress_index].all()
+        head = Gr00tN1d7ActionHead(config)
+        backbone_attention = CaptureBackboneAttention()
+        head.vl_self_attention = backbone_attention
+        head.model = CaptureModel()
+        head.action_decoder = CaptureActionDecoder()
+
+        head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        assert len(backbone_attention.hidden_states) == 2
+        assert backbone_attention.hidden_states[0].shape[1] == 9
+        assert backbone_attention.hidden_states[1].shape[1] == 8
+        assert head.model.hidden_states.shape[1] == 1 + config.action_horizon
 
 
 class TestActionHeadGetAction:
