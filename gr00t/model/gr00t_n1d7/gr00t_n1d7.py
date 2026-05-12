@@ -227,30 +227,59 @@ class Gr00tN1d7ActionHead(nn.Module):
         for parameter in self.progress_head.parameters():
             parameter.register_hook(_sanitize_grad)
 
-    def _make_self_attention_mask(
+    def _make_progress_route_features(
         self,
+        state_features: torch.Tensor,
+        action_features: torch.Tensor,
+        action_position_features: torch.Tensor | None,
         batch_size: int,
-        seq_len: int,
-        progress_index: int | None,
-        action_start: int,
-        action_end: int,
         device: torch.device,
-    ) -> torch.Tensor | None:
-        if (
-            not self.enable_progress_head
-            or not self.isolate_progress_action_attention
-            or progress_index is None
-        ):
-            return None
+    ) -> tuple[torch.Tensor, int]:
+        progress_features = self._make_progress_features(
+            batch_size=batch_size,
+            position_index=action_features.shape[1],
+            device=device,
+            dtype=action_features.dtype,
+        )
+        if action_position_features is None:
+            action_placeholders = torch.zeros_like(action_features)
+        else:
+            action_placeholders = action_position_features.to(
+                device=device,
+                dtype=action_features.dtype,
+            )
+        progress_index = state_features.shape[1] + action_placeholders.shape[1]
+        return torch.cat(
+            (state_features, action_placeholders, progress_features), dim=1
+        ), progress_index
 
-        attention_mask = torch.ones(batch_size, seq_len, seq_len, dtype=torch.bool, device=device)
-        # Preserve the original state/action path by preventing those tokens
-        # from reading the auxiliary progress token. The progress token reads
-        # state and itself only, not action tokens.
-        attention_mask[:, :progress_index, progress_index] = False
-        attention_mask[:, progress_index, action_start:action_end] = False
-        attention_mask[:, action_start:action_end, progress_index] = False
-        return attention_mask
+    def _run_model(
+        self,
+        hidden_states: torch.Tensor,
+        vl_embeds: torch.Tensor,
+        timestep: torch.Tensor,
+        backbone_output: BatchFeature,
+        return_all_hidden_states: bool = False,
+    ):
+        if self.config.use_alternate_vl_dit:
+            return self.model(
+                hidden_states=hidden_states,
+                encoder_hidden_states=vl_embeds,
+                attention_mask=None,
+                encoder_attention_mask=backbone_output.backbone_attention_mask,
+                timestep=timestep,
+                return_all_hidden_states=return_all_hidden_states,
+                image_mask=backbone_output.image_mask,
+                backbone_attention_mask=backbone_output.backbone_attention_mask,
+            )
+        return self.model(
+            hidden_states=hidden_states,
+            encoder_hidden_states=vl_embeds,
+            attention_mask=None,
+            encoder_attention_mask=backbone_output.backbone_attention_mask,
+            timestep=timestep,
+            return_all_hidden_states=return_all_hidden_states,
+        )
 
     def _predict_progress(self, progress_hidden: torch.Tensor) -> torch.Tensor:
         progress_head_dtype = next(self.progress_head.parameters()).dtype
@@ -331,18 +360,30 @@ class Gr00tN1d7ActionHead(nn.Module):
         action_features = self.action_encoder(noisy_trajectory, t_discretized, embodiment_id)
 
         # Maybe add position embedding.
+        action_position_features = None
         if self.config.add_pos_embed:
             pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
             pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
+            action_position_features = pos_embs.expand(action_features.shape[0], -1, -1)
             action_features = action_features + pos_embs
 
-        # Join state, action tokens, and optional auxiliary progress token.
-        # The Progress Token is appended after action tokens so the frozen
-        # action path keeps the same token positions as the original model.
+        # Join state, action tokens, and optional auxiliary progress token. In
+        # isolated mode, the action route stays identical to the original model
+        # and the progress route gets action-position placeholders only.
         action_start = state_features.shape[1]
         action_end = action_start + actions.shape[1]
         progress_index = None
-        if self.enable_progress_head:
+        progress_sa_embs = None
+        if self.enable_progress_head and self.isolate_progress_action_attention:
+            sa_embs = torch.cat((state_features, action_features), dim=1)
+            progress_sa_embs, progress_index = self._make_progress_route_features(
+                state_features=state_features,
+                action_features=action_features,
+                action_position_features=action_position_features,
+                batch_size=actions.shape[0],
+                device=device,
+            )
+        elif self.enable_progress_head:
             progress_index = action_end
             progress_features = self._make_progress_features(
                 batch_size=actions.shape[0],
@@ -353,38 +394,13 @@ class Gr00tN1d7ActionHead(nn.Module):
             sa_embs = torch.cat((state_features, action_features, progress_features), dim=1)
         else:
             sa_embs = torch.cat((state_features, action_features), dim=1)
-        self_attention_mask = self._make_self_attention_mask(
-            batch_size=actions.shape[0],
-            seq_len=sa_embs.shape[1],
-            progress_index=progress_index,
-            action_start=action_start,
-            action_end=action_end,
-            device=device,
+        model_output, _ = self._run_model(
+            hidden_states=sa_embs,
+            vl_embeds=vl_embeds,
+            timestep=t_discretized,
+            backbone_output=backbone_output,
+            return_all_hidden_states=True,
         )
-        vl_attn_mask = backbone_output.backbone_attention_mask
-
-        if self.config.use_alternate_vl_dit:
-            image_mask = backbone_output.image_mask
-            backbone_attention_mask = backbone_output.backbone_attention_mask
-            model_output, _ = self.model(
-                hidden_states=sa_embs,
-                encoder_hidden_states=vl_embeds,
-                attention_mask=self_attention_mask,
-                encoder_attention_mask=vl_attn_mask,
-                timestep=t_discretized,
-                return_all_hidden_states=True,
-                image_mask=image_mask,
-                backbone_attention_mask=backbone_attention_mask,
-            )
-        else:
-            model_output, _ = self.model(
-                hidden_states=sa_embs,
-                encoder_hidden_states=vl_embeds,
-                attention_mask=self_attention_mask,
-                encoder_attention_mask=vl_attn_mask,
-                timestep=t_discretized,
-                return_all_hidden_states=True,
-            )
 
         pred_actions = self.action_decoder(model_output[:, action_start:action_end], embodiment_id)
 
@@ -402,7 +418,16 @@ class Gr00tN1d7ActionHead(nn.Module):
         }
 
         if self.enable_progress_head:
-            progress_pred = self._predict_progress(model_output[:, progress_index])
+            progress_output = model_output
+            if progress_sa_embs is not None:
+                progress_output, _ = self._run_model(
+                    hidden_states=progress_sa_embs,
+                    vl_embeds=vl_embeds,
+                    timestep=t_discretized,
+                    backbone_output=backbone_output,
+                    return_all_hidden_states=True,
+                )
+            progress_pred = self._predict_progress(progress_output[:, progress_index])
             output["progress_pred"] = progress_pred
             if "progress" in action_input:
                 progress_target = action_input.progress.to(
@@ -538,16 +563,28 @@ class Gr00tN1d7ActionHead(nn.Module):
             )
             action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
             # Add position embedding.
+            action_position_features = None
             if self.config.add_pos_embed:
                 pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
                 pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
+                action_position_features = pos_embs.expand(action_features.shape[0], -1, -1)
                 action_features = action_features + pos_embs
 
             # Join state, action tokens, and optional auxiliary progress token.
             action_start = state_features.shape[1]
             action_end = action_start + self.action_horizon
             progress_index = None
-            if self.enable_progress_head:
+            progress_sa_embs = None
+            if self.enable_progress_head and self.isolate_progress_action_attention:
+                sa_embs = torch.cat((state_features, action_features), dim=1)
+                progress_sa_embs, progress_index = self._make_progress_route_features(
+                    state_features=state_features,
+                    action_features=action_features,
+                    action_position_features=action_position_features,
+                    batch_size=batch_size,
+                    device=device,
+                )
+            elif self.enable_progress_head:
                 progress_index = action_end
                 progress_features = self._make_progress_features(
                     batch_size=batch_size,
@@ -558,38 +595,28 @@ class Gr00tN1d7ActionHead(nn.Module):
                 sa_embs = torch.cat((state_features, action_features, progress_features), dim=1)
             else:
                 sa_embs = torch.cat((state_features, action_features), dim=1)
-            self_attention_mask = self._make_self_attention_mask(
-                batch_size=batch_size,
-                seq_len=sa_embs.shape[1],
-                progress_index=progress_index,
-                action_start=action_start,
-                action_end=action_end,
-                device=device,
-            )
 
             # Run model forward.
-            if self.config.use_alternate_vl_dit:
-                model_output = self.model(
-                    hidden_states=sa_embs,
-                    encoder_hidden_states=vl_embeds,
-                    attention_mask=self_attention_mask,
-                    timestep=timesteps_tensor,
-                    image_mask=backbone_output.image_mask,
-                    backbone_attention_mask=backbone_output.backbone_attention_mask,
-                )
-            else:
-                model_output = self.model(
-                    hidden_states=sa_embs,
-                    encoder_hidden_states=vl_embeds,
-                    attention_mask=self_attention_mask,
-                    timestep=timesteps_tensor,
-                )
+            model_output = self._run_model(
+                hidden_states=sa_embs,
+                vl_embeds=vl_embeds,
+                timestep=timesteps_tensor,
+                backbone_output=backbone_output,
+            )
             pred_velocity = self.action_decoder(
                 model_output[:, action_start:action_end],
                 embodiment_id,
             )
             if self.enable_progress_head:
-                progress_pred = self._predict_progress(model_output[:, progress_index])
+                progress_output = model_output
+                if progress_sa_embs is not None:
+                    progress_output = self._run_model(
+                        hidden_states=progress_sa_embs,
+                        vl_embeds=vl_embeds,
+                        timestep=timesteps_tensor,
+                        backbone_output=backbone_output,
+                    )
+                progress_pred = self._predict_progress(progress_output[:, progress_index])
 
             # Update actions using euler integration.
             actions = actions + dt * pred_velocity * vel_strength
