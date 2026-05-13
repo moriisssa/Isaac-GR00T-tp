@@ -232,7 +232,7 @@ class TestGr00tN1d7Forward:
         assert output["progress_pred"].shape == (2,)
         assert model.backbone.call_count == 2
 
-    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state", "vlm_pooled_dit"])
     def test_forward_with_vlm_pooled_progress_head(self, source):
         config = _make_small_config(
             enable_progress_head=True,
@@ -303,7 +303,7 @@ class TestGr00tN1d7GetAction:
         assert output["progress_pred"].shape == (1,)
         assert model.backbone.call_count == 2
 
-    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state", "vlm_pooled_dit"])
     def test_get_action_with_vlm_pooled_progress_head(self, source):
         config = _make_small_config(enable_progress_head=True, progress_head_source=source)
 

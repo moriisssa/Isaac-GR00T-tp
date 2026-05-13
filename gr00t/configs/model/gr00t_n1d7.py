@@ -123,7 +123,8 @@ class Gr00tN1d7Config(PretrainedConfig):
     # append a learned progress token after action tokens ("action"), append a
     # learned query to the vision-language features only ("vlm"), run a
     # progress-only DiT route over progress-aware VLM features ("vlm_dit"), or
-    # regress from pooled VLM features with optional state features.
+    # run a progress-only DiT route from pooled VLM features ("vlm_pooled_dit"),
+    # or regress from pooled VLM features with optional state features.
     # Labels are normalized to [0, 1], and the MLP prediction head is
     # sigmoid-clamped to the same range.
     enable_progress_head: bool = False

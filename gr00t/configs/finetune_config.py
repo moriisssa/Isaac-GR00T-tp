@@ -85,8 +85,10 @@ class FinetuneConfig:
     Progress feature source. Use "action" to read progress from the diffusion
     token path, "vlm" to read it from a vision-language-only query token,
     "vlm_dit" to insert the query into System2 and run a progress-only DiT route,
-    "vlm_pooled" to regress from pooled System2 features, or "vlm_pooled_state"
-    to concatenate pooled System2 features with the frozen robot-state embedding.
+    "vlm_pooled_dit" to project pooled System2 features into a progress-only DiT
+    route, "vlm_pooled" to regress from pooled System2 features, or
+    "vlm_pooled_state" to concatenate pooled System2 features with the frozen
+    robot-state embedding.
     """
 
     isolate_progress_action_attention: bool = False
