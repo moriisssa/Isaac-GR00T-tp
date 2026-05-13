@@ -232,6 +232,27 @@ class TestGr00tN1d7Forward:
         assert output["progress_pred"].shape == (2,)
         assert model.backbone.call_count == 2
 
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
+    def test_forward_with_vlm_pooled_progress_head(self, source):
+        config = _make_small_config(
+            enable_progress_head=True,
+            progress_head_source=source,
+            progress_loss_weight=0.2,
+        )
+
+        with patch("gr00t.model.gr00t_n1d7.gr00t_n1d7.get_backbone_cls") as mock_get_cls:
+            mock_get_cls.return_value = lambda **kwargs: _make_mock_backbone(config)
+            with patch("gr00t.model.gr00t_n1d7.processing_gr00t_n1d7.build_processor"):
+                from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7
+
+                model = Gr00tN1d7(config)
+
+        output = model.forward(_make_dummy_inputs(config))
+        assert "progress_pred" in output
+        assert "progress_loss" in output
+        assert output["progress_pred"].shape == (2,)
+        assert model.backbone.call_count == 1
+
 
 class TestGr00tN1d7GetAction:
     """Test model action generation."""
@@ -281,6 +302,23 @@ class TestGr00tN1d7GetAction:
         output = model.get_action(inputs)
         assert output["progress_pred"].shape == (1,)
         assert model.backbone.call_count == 2
+
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
+    def test_get_action_with_vlm_pooled_progress_head(self, source):
+        config = _make_small_config(enable_progress_head=True, progress_head_source=source)
+
+        with patch("gr00t.model.gr00t_n1d7.gr00t_n1d7.get_backbone_cls") as mock_get_cls:
+            mock_get_cls.return_value = lambda **kwargs: _make_mock_backbone(config)
+            with patch("gr00t.model.gr00t_n1d7.processing_gr00t_n1d7.build_processor"):
+                from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7
+
+                model = Gr00tN1d7(config)
+
+        inputs = _make_dummy_inputs(config, batch_size=1)
+        del inputs["action"]
+        output = model.get_action(inputs)
+        assert output["progress_pred"].shape == (1,)
+        assert model.backbone.call_count == 1
 
 
 class TestGr00tN1d7Config:

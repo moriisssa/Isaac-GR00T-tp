@@ -83,28 +83,37 @@ class Gr00tN1d7ActionHead(nn.Module):
         self.enable_progress_head = config.enable_progress_head
         self.progress_loss_weight = config.progress_loss_weight
         self.progress_head_source = getattr(config, "progress_head_source", "action").lower()
-        if self.progress_head_source not in {"action", "vlm", "vlm_dit"}:
+        if self.progress_head_source not in {
+            "action",
+            "vlm",
+            "vlm_dit",
+            "vlm_pooled",
+            "vlm_pooled_state",
+        }:
             raise ValueError(
                 f"Unsupported progress_head_source={self.progress_head_source!r}; "
-                "expected 'action', 'vlm', or 'vlm_dit'."
+                "expected 'action', 'vlm', 'vlm_dit', 'vlm_pooled', or 'vlm_pooled_state'."
             )
         self.isolate_progress_action_attention = getattr(
             config, "isolate_progress_action_attention", False
         )
         if self.enable_progress_head:
+            use_progress_token = self.progress_head_source in {"action", "vlm", "vlm_dit"}
             progress_token_dim = (
                 config.backbone_embedding_dim
                 if self.progress_head_source in {"vlm", "vlm_dit"}
                 else self.input_embedding_dim
             )
-            progress_head_dim = (
-                config.backbone_embedding_dim
-                if self.progress_head_source == "vlm"
-                else self.hidden_size
-            )
-            self.progress_token = nn.Parameter(torch.empty(1, 1, progress_token_dim))
-            nn.init.normal_(self.progress_token, mean=0.0, std=1.0)
-            self.progress_token_scale = 0.02
+            if self.progress_head_source in {"vlm", "vlm_pooled"}:
+                progress_head_dim = config.backbone_embedding_dim
+            elif self.progress_head_source == "vlm_pooled_state":
+                progress_head_dim = config.backbone_embedding_dim + self.input_embedding_dim
+            else:
+                progress_head_dim = self.hidden_size
+            if use_progress_token:
+                self.progress_token = nn.Parameter(torch.empty(1, 1, progress_token_dim))
+                nn.init.normal_(self.progress_token, mean=0.0, std=1.0)
+                self.progress_token_scale = 0.02
             if self.progress_head_source == "vlm_dit":
                 self.progress_vlm_projector = nn.Linear(
                     config.backbone_embedding_dim,
@@ -176,7 +185,8 @@ class Gr00tN1d7ActionHead(nn.Module):
             self.vlln.requires_grad_(False)
             self.vl_self_attention.requires_grad_(False)
         if self.enable_progress_head and not tune_progress_head:
-            self.progress_token.requires_grad_(False)
+            if hasattr(self, "progress_token"):
+                self.progress_token.requires_grad_(False)
             self.progress_head.requires_grad_(False)
             if hasattr(self, "progress_vlm_projector"):
                 self.progress_vlm_projector.requires_grad_(False)
@@ -238,6 +248,19 @@ class Gr00tN1d7ActionHead(nn.Module):
     def _uses_vlm_dit_progress_head(self) -> bool:
         return self.enable_progress_head and self.progress_head_source == "vlm_dit"
 
+    def _uses_vlm_pooled_progress_head(self) -> bool:
+        return self.enable_progress_head and self.progress_head_source in {
+            "vlm_pooled",
+            "vlm_pooled_state",
+        }
+
+    def _uses_non_action_progress_head(self) -> bool:
+        return (
+            self._uses_vlm_progress_head()
+            or self._uses_vlm_dit_progress_head()
+            or self._uses_vlm_pooled_progress_head()
+        )
+
     def uses_backbone_progress_token(self) -> bool:
         return self._uses_vlm_dit_progress_head()
 
@@ -294,6 +317,26 @@ class Gr00tN1d7ActionHead(nn.Module):
         )
         return progress_output[:, state_features.shape[1]]
 
+    def _pool_vlm_features(self, backbone_output: BatchFeature) -> torch.Tensor:
+        backbone_features = backbone_output.backbone_features
+        mask = backbone_output.backbone_attention_mask.to(
+            device=backbone_features.device,
+            dtype=backbone_features.dtype,
+        )
+        mask = mask.unsqueeze(-1)
+        denom = mask.sum(dim=1).clamp_min(1.0)
+        return (backbone_features * mask).sum(dim=1) / denom
+
+    def _compute_vlm_pooled_progress_hidden(
+        self,
+        backbone_output: BatchFeature,
+        state_features: torch.Tensor,
+    ) -> torch.Tensor:
+        pooled_features = self._pool_vlm_features(backbone_output)
+        if self.progress_head_source == "vlm_pooled_state":
+            return torch.cat((pooled_features, state_features.squeeze(1)), dim=-1)
+        return pooled_features
+
     def _make_progress_features(
         self,
         batch_size: int,
@@ -312,7 +355,8 @@ class Gr00tN1d7ActionHead(nn.Module):
         def _sanitize_grad(grad: torch.Tensor) -> torch.Tensor:
             return torch.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
 
-        self.progress_token.register_hook(_sanitize_grad)
+        if hasattr(self, "progress_token"):
+            self.progress_token.register_hook(_sanitize_grad)
         for parameter in self.progress_head.parameters():
             parameter.register_hook(_sanitize_grad)
         if hasattr(self, "progress_vlm_projector"):
@@ -449,6 +493,12 @@ class Gr00tN1d7ActionHead(nn.Module):
             do_dropout = do_dropout[:, None, None].to(dtype=state_features.dtype)
             state_features = state_features * (1 - do_dropout)
 
+        if self._uses_vlm_pooled_progress_head():
+            vlm_progress_hidden = self._compute_vlm_pooled_progress_hidden(
+                backbone_output=backbone_output,
+                state_features=state_features,
+            )
+
         # Embed noised action trajectory.
         actions = action_input.action
         noise = torch.randn(actions.shape, device=actions.device, dtype=actions.dtype)
@@ -477,7 +527,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         action_end = action_start + actions.shape[1]
         progress_index = None
         progress_sa_embs = None
-        if self._uses_vlm_progress_head() or self._uses_vlm_dit_progress_head():
+        if self._uses_non_action_progress_head():
             sa_embs = torch.cat((state_features, action_features), dim=1)
         elif self.enable_progress_head and self.isolate_progress_action_attention:
             sa_embs = torch.cat((state_features, action_features), dim=1)
@@ -523,7 +573,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         }
 
         if self.enable_progress_head:
-            if self._uses_vlm_progress_head():
+            if self._uses_vlm_progress_head() or self._uses_vlm_pooled_progress_head():
                 progress_pred = self._predict_progress(vlm_progress_hidden)
             elif self._uses_vlm_dit_progress_head():
                 progress_hidden = self._compute_vlm_dit_progress_hidden(
@@ -602,6 +652,12 @@ class Gr00tN1d7ActionHead(nn.Module):
         # Embed state.
         state_features = self.state_encoder(state, embodiment_id)
 
+        if self._uses_vlm_pooled_progress_head():
+            vlm_progress_hidden = self._compute_vlm_pooled_progress_hidden(
+                backbone_output=backbone_output,
+                state_features=state_features,
+            )
+
         features = {"backbone_features": vl_embeds, "state_features": state_features}
         if vlm_progress_hidden is not None:
             features["progress_hidden"] = vlm_progress_hidden
@@ -644,7 +700,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         dt = 1.0 / self.num_inference_timesteps
         vel_strength = torch.ones_like(actions)
         progress_pred = None
-        if self._uses_vlm_progress_head():
+        if self._uses_vlm_progress_head() or self._uses_vlm_pooled_progress_head():
             assert progress_hidden is not None
             progress_pred = self._predict_progress(progress_hidden)
         elif self._uses_vlm_dit_progress_head():
@@ -716,7 +772,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             action_end = action_start + self.action_horizon
             progress_index = None
             progress_sa_embs = None
-            if self._uses_vlm_progress_head() or self._uses_vlm_dit_progress_head():
+            if self._uses_non_action_progress_head():
                 sa_embs = torch.cat((state_features, action_features), dim=1)
             elif self.enable_progress_head and self.isolate_progress_action_attention:
                 sa_embs = torch.cat((state_features, action_features), dim=1)
@@ -752,8 +808,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             )
             if (
                 self.enable_progress_head
-                and not self._uses_vlm_progress_head()
-                and not self._uses_vlm_dit_progress_head()
+                and not self._uses_non_action_progress_head()
             ):
                 progress_output = model_output
                 if progress_sa_embs is not None:

@@ -137,6 +137,23 @@ class TestActionHeadForward:
         assert out["progress_pred"].shape == (2,)
         assert torch.isfinite(out["loss"])
 
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
+    def test_forward_with_vlm_pooled_progress_head(self, source):
+        config = _small_config(enable_progress_head=True, progress_head_source=source)
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        assert "progress_pred" in out
+        assert "progress_loss" in out
+        assert out["progress_pred"].shape == (2,)
+        assert torch.isfinite(out["loss"])
+        assert not hasattr(head, "progress_token")
+        expected_dim = config.backbone_embedding_dim
+        if source == "vlm_pooled_state":
+            expected_dim += config.input_embedding_dim
+        assert head.progress_head[0].normalized_shape == (expected_dim,)
+
     def test_progress_only_training_loss_excludes_action_loss(self):
         config = _small_config(
             enable_progress_head=True,
@@ -358,6 +375,43 @@ class TestActionHeadForward:
         assert head.model.encoder_hidden_states[0].shape[1] == 8
         assert head.model.encoder_hidden_states[1].shape[1] == 9
 
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
+    def test_vlm_pooled_progress_head_does_not_add_action_token(self, source):
+        class CaptureModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.hidden_states = []
+
+            def forward(self, hidden_states, **kwargs):
+                self.hidden_states.append(hidden_states.detach().clone())
+                if kwargs.get("return_all_hidden_states"):
+                    return hidden_states, None
+                return hidden_states
+
+        class CaptureActionDecoder(torch.nn.Module):
+            def forward(self, hidden_states, embodiment_id):
+                return torch.zeros(
+                    hidden_states.shape[0],
+                    hidden_states.shape[1],
+                    config.max_action_dim,
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source=source,
+            add_pos_embed=False,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        head.model = CaptureModel()
+        head.action_decoder = CaptureActionDecoder()
+
+        head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        assert len(head.model.hidden_states) == 1
+        assert head.model.hidden_states[0].shape[1] == 1 + config.action_horizon
+
 
 class TestActionHeadGetAction:
     """Test inference denoising loop."""
@@ -476,6 +530,22 @@ class TestActionHeadTrainableParams:
             or name.startswith("progress_vlm_projector")
             for name in trainable
         )
+
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
+    def test_vlm_pooled_progress_only_leaves_only_progress_head_trainable(self, source):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source=source,
+            tune_projector=False,
+            tune_diffusion_model=False,
+            tune_vlln=False,
+            tune_progress_head=True,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        trainable = {name for name, p in head.named_parameters() if p.requires_grad}
+
+        assert trainable
+        assert all(name.startswith("progress_head") for name in trainable)
 
     def test_freeze_progress_head(self):
         config = _small_config(enable_progress_head=True, tune_progress_head=False)
