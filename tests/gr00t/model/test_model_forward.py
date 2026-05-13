@@ -79,7 +79,7 @@ def _make_mock_backbone(config, seq_len=8):
     """Return a mock backbone that produces correctly-shaped outputs."""
     backbone = MagicMock()
 
-    def fake_forward(vl_input):
+    def fake_forward(vl_input, progress_token=None):
         B = 1
         # Try to infer batch size from input
         for v in vl_input.values():
@@ -98,15 +98,25 @@ def _make_mock_backbone(config, seq_len=8):
             ),
             torch.float32,
         )
-        return BatchFeature(
-            data={
-                "backbone_features": torch.randn(
-                    B, seq_len, config.backbone_embedding_dim, device=device, dtype=dtype
-                ),
-                "backbone_attention_mask": torch.ones(B, seq_len, device=device, dtype=torch.long),
-                "image_mask": torch.ones(B, seq_len, device=device, dtype=torch.bool),
-            }
-        )
+        output_seq_len = seq_len + 1 if progress_token is not None else seq_len
+        output = {
+            "backbone_features": torch.randn(
+                B, output_seq_len, config.backbone_embedding_dim, device=device, dtype=dtype
+            ),
+            "backbone_attention_mask": torch.ones(
+                B, output_seq_len, device=device, dtype=torch.long
+            ),
+            "image_mask": torch.ones(B, output_seq_len, device=device, dtype=torch.bool),
+        }
+        if progress_token is not None:
+            output["progress_token_index"] = torch.full(
+                (B,),
+                output_seq_len - 1,
+                device=device,
+                dtype=torch.long,
+            )
+            output["image_mask"][:, -1] = False
+        return BatchFeature(data=output)
 
     backbone.side_effect = fake_forward
     backbone.prepare_input = lambda x: BatchFeature(data=x)
@@ -139,6 +149,18 @@ def _make_dummy_inputs(config, batch_size=2):
     }
     if config.enable_progress_head:
         inputs["progress"] = torch.linspace(0.0, 1.0, batch_size)
+    return inputs
+
+
+def _add_dummy_vlm_inputs(inputs, batch_size):
+    inputs.update(
+        {
+            "input_ids": torch.ones(batch_size, 6, dtype=torch.long),
+            "attention_mask": torch.ones(batch_size, 6, dtype=torch.long),
+            "pixel_values": torch.randn(batch_size, 3, 8, 8),
+            "image_grid_thw": torch.ones(batch_size, 3, dtype=torch.long),
+        }
+    )
     return inputs
 
 
@@ -190,6 +212,26 @@ class TestGr00tN1d7Forward:
         assert "progress_loss" in output
         assert output["progress_pred"].shape == (2,)
 
+    def test_forward_with_vlm_dit_progress_head(self):
+        config = _make_small_config(
+            enable_progress_head=True,
+            progress_head_source="vlm_dit",
+            progress_loss_weight=0.2,
+        )
+
+        with patch("gr00t.model.gr00t_n1d7.gr00t_n1d7.get_backbone_cls") as mock_get_cls:
+            mock_get_cls.return_value = lambda **kwargs: _make_mock_backbone(config)
+            with patch("gr00t.model.gr00t_n1d7.processing_gr00t_n1d7.build_processor"):
+                from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7
+
+                model = Gr00tN1d7(config)
+
+        output = model.forward(_add_dummy_vlm_inputs(_make_dummy_inputs(config), batch_size=2))
+        assert "progress_pred" in output
+        assert "progress_loss" in output
+        assert output["progress_pred"].shape == (2,)
+        assert model.backbone.call_count == 2
+
 
 class TestGr00tN1d7GetAction:
     """Test model action generation."""
@@ -223,6 +265,22 @@ class TestGr00tN1d7GetAction:
         del inputs["action"]
         output = model.get_action(inputs)
         assert output["progress_pred"].shape == (1,)
+
+    def test_get_action_with_vlm_dit_progress_head(self):
+        config = _make_small_config(enable_progress_head=True, progress_head_source="vlm_dit")
+
+        with patch("gr00t.model.gr00t_n1d7.gr00t_n1d7.get_backbone_cls") as mock_get_cls:
+            mock_get_cls.return_value = lambda **kwargs: _make_mock_backbone(config)
+            with patch("gr00t.model.gr00t_n1d7.processing_gr00t_n1d7.build_processor"):
+                from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7
+
+                model = Gr00tN1d7(config)
+
+        inputs = _add_dummy_vlm_inputs(_make_dummy_inputs(config, batch_size=1), batch_size=1)
+        del inputs["action"]
+        output = model.get_action(inputs)
+        assert output["progress_pred"].shape == (1,)
+        assert model.backbone.call_count == 2
 
 
 class TestGr00tN1d7Config:

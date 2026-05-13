@@ -135,11 +135,107 @@ class Qwen3Backbone(torch.nn.Module):
     def prepare_input(self, batch: dict) -> BatchFeature:
         return BatchFeature(data=batch)
 
-    def forward(self, vl_input: BatchFeature) -> BatchFeature:
+    def _resolve_progress_token_id(self) -> int:
+        token_id = getattr(self.model.config, "eos_token_id", None)
+        text_config = getattr(self.model.config, "text_config", None)
+        if token_id is None:
+            token_id = getattr(text_config, "eos_token_id", None)
+        if isinstance(token_id, (list, tuple)):
+            token_id = token_id[0]
+        if token_id is None:
+            token_id = 0
+        return int(token_id)
+
+    def _resolve_pad_token_id(self) -> int:
+        token_id = getattr(self.model.config, "pad_token_id", None)
+        text_config = getattr(self.model.config, "text_config", None)
+        if token_id is None:
+            token_id = getattr(text_config, "pad_token_id", None)
+        if token_id is None:
+            token_id = 0
+        return int(token_id)
+
+    def _forward_with_progress_token(
+        self,
+        vl_input: dict[str, torch.Tensor],
+        progress_token: torch.Tensor,
+    ) -> BatchFeature:
+        input_ids = vl_input["input_ids"]
+        attention_mask = vl_input["attention_mask"]
+        batch_size, seq_len = input_ids.shape
+        embedding_layer = self.model.model.get_input_embeddings()
+        inputs_embeds = embedding_layer(input_ids)
+
+        progress_token = progress_token.to(
+            device=inputs_embeds.device,
+            dtype=inputs_embeds.dtype,
+        )
+        if progress_token.shape[0] == 1:
+            progress_token = progress_token.expand(batch_size, -1, -1)
+
+        pad_token_id = self._resolve_pad_token_id()
+        progress_token_id = self._resolve_progress_token_id()
+        progress_input_ids = input_ids.new_full((batch_size, seq_len + 1), pad_token_id)
+        progress_attention_mask = attention_mask.new_zeros((batch_size, seq_len + 1))
+        progress_inputs_embeds = inputs_embeds.new_zeros(
+            batch_size,
+            seq_len + 1,
+            inputs_embeds.shape[-1],
+        )
+        progress_token_index = attention_mask.to(torch.long).sum(dim=1)
+
+        for batch_idx in range(batch_size):
+            insert_at = int(progress_token_index[batch_idx].item())
+            progress_input_ids[batch_idx, :insert_at] = input_ids[batch_idx, :insert_at]
+            progress_input_ids[batch_idx, insert_at] = progress_token_id
+            progress_input_ids[batch_idx, insert_at + 1 :] = input_ids[batch_idx, insert_at:]
+            progress_attention_mask[batch_idx, :insert_at] = attention_mask[batch_idx, :insert_at]
+            progress_attention_mask[batch_idx, insert_at] = 1
+            progress_attention_mask[batch_idx, insert_at + 1 :] = attention_mask[
+                batch_idx, insert_at:
+            ]
+            progress_inputs_embeds[batch_idx, :insert_at] = inputs_embeds[batch_idx, :insert_at]
+            progress_inputs_embeds[batch_idx, insert_at] = progress_token[batch_idx, 0]
+            progress_inputs_embeds[batch_idx, insert_at + 1 :] = inputs_embeds[
+                batch_idx, insert_at:
+            ]
+
+        position_ids, _ = self.model.model.get_rope_index(
+            progress_input_ids,
+            vl_input.get("image_grid_thw"),
+            None,
+            attention_mask=progress_attention_mask,
+        )
+        outputs = self.model.model(
+            input_ids=None,
+            inputs_embeds=progress_inputs_embeds,
+            attention_mask=progress_attention_mask,
+            position_ids=position_ids,
+            pixel_values=vl_input.get("pixel_values"),
+            image_grid_thw=vl_input.get("image_grid_thw"),
+        )
+        image_mask = progress_input_ids == self.model.config.image_token_id
+        return BatchFeature(
+            data={
+                "backbone_features": outputs.last_hidden_state,
+                "backbone_attention_mask": progress_attention_mask == 1,
+                "image_mask": image_mask,
+                "progress_token_index": progress_token_index,
+            }
+        )
+
+    def forward(
+        self,
+        vl_input: BatchFeature,
+        progress_token: torch.Tensor | None = None,
+    ) -> BatchFeature:
         self.set_frozen_modules_to_eval_mode()
         # 0. Set frozen module to eval
         keys_to_use = ["input_ids", "attention_mask", "pixel_values", "image_grid_thw"]
         vl_input = {k: vl_input[k] for k in keys_to_use}
+        if progress_token is not None:
+            return self._forward_with_progress_token(vl_input, progress_token)
+
         outputs = self.model(**vl_input, output_hidden_states=True)
         outputs = outputs.hidden_states[-1]
         image_mask = vl_input["input_ids"] == self.model.config.image_token_id

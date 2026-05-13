@@ -119,6 +119,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                     [
                         "action_head.progress_token",
                         "action_head.progress_head",
+                        "action_head.progress_vlm_projector",
                     ]
                 )
             other_missing = [
@@ -131,6 +132,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 for k in missing_keys
                 if k.startswith("action_head.progress_token")
                 or k.startswith("action_head.progress_head")
+                or k.startswith("action_head.progress_vlm_projector")
             ]
             if progress_missing:
                 logging.info(
@@ -143,6 +145,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                     [
                         "action_head.progress_token",
                         "action_head.progress_head",
+                        "action_head.progress_vlm_projector",
                     ]
                 )
             progress_unexpected = [

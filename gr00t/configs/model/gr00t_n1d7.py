@@ -120,8 +120,9 @@ class Gr00tN1d7Config(PretrainedConfig):
     use_mean_std: bool = False  # Use mean/std normalization instead of min/max
 
     # Auxiliary task-progress prediction.  When enabled, the action head can
-    # either append a learned progress token after action tokens ("action") or
-    # append a learned query to the vision-language features only ("vlm").
+    # either append a learned progress token after action tokens ("action"),
+    # append a learned query to the vision-language features only ("vlm"), or
+    # run a progress-only DiT route over progress-aware VLM features ("vlm_dit").
     # Labels are normalized to [0, 1], and the MLP prediction head is
     # sigmoid-clamped to the same range.
     enable_progress_head: bool = False

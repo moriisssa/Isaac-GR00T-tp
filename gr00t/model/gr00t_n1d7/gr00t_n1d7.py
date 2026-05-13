@@ -83,10 +83,10 @@ class Gr00tN1d7ActionHead(nn.Module):
         self.enable_progress_head = config.enable_progress_head
         self.progress_loss_weight = config.progress_loss_weight
         self.progress_head_source = getattr(config, "progress_head_source", "action").lower()
-        if self.progress_head_source not in {"action", "vlm"}:
+        if self.progress_head_source not in {"action", "vlm", "vlm_dit"}:
             raise ValueError(
                 f"Unsupported progress_head_source={self.progress_head_source!r}; "
-                "expected 'action' or 'vlm'."
+                "expected 'action', 'vlm', or 'vlm_dit'."
             )
         self.isolate_progress_action_attention = getattr(
             config, "isolate_progress_action_attention", False
@@ -94,7 +94,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         if self.enable_progress_head:
             progress_token_dim = (
                 config.backbone_embedding_dim
-                if self.progress_head_source == "vlm"
+                if self.progress_head_source in {"vlm", "vlm_dit"}
                 else self.input_embedding_dim
             )
             progress_head_dim = (
@@ -105,6 +105,13 @@ class Gr00tN1d7ActionHead(nn.Module):
             self.progress_token = nn.Parameter(torch.empty(1, 1, progress_token_dim))
             nn.init.normal_(self.progress_token, mean=0.0, std=1.0)
             self.progress_token_scale = 0.02
+            if self.progress_head_source == "vlm_dit":
+                self.progress_vlm_projector = nn.Linear(
+                    config.backbone_embedding_dim,
+                    self.input_embedding_dim,
+                )
+                nn.init.xavier_uniform_(self.progress_vlm_projector.weight)
+                nn.init.zeros_(self.progress_vlm_projector.bias)
             self.progress_head = nn.Sequential(
                 nn.LayerNorm(progress_head_dim),
                 nn.Linear(progress_head_dim, progress_head_dim),
@@ -171,6 +178,8 @@ class Gr00tN1d7ActionHead(nn.Module):
         if self.enable_progress_head and not tune_progress_head:
             self.progress_token.requires_grad_(False)
             self.progress_head.requires_grad_(False)
+            if hasattr(self, "progress_vlm_projector"):
+                self.progress_vlm_projector.requires_grad_(False)
         logger.debug(f"Tune action head projector: {self.tune_projector}")
         logger.debug(f"Tune action head diffusion model: {self.tune_diffusion_model}")
         logger.debug(f"Tune action head vlln: {self.tune_vlln}")
@@ -206,8 +215,10 @@ class Gr00tN1d7ActionHead(nn.Module):
             if not self.tune_vlln:
                 self.vlln.eval()
                 self.vl_self_attention.eval()
-            if self.enable_progress_head and not self.tune_progress_head:
-                self.progress_head.eval()
+        if self.enable_progress_head and not self.tune_progress_head:
+            self.progress_head.eval()
+            if hasattr(self, "progress_vlm_projector"):
+                self.progress_vlm_projector.eval()
 
     def sample_time(self, batch_size, device, dtype):
         sample = self.beta_dist.sample([batch_size]).to(device, dtype=dtype)
@@ -224,6 +235,24 @@ class Gr00tN1d7ActionHead(nn.Module):
     def _uses_vlm_progress_head(self) -> bool:
         return self.enable_progress_head and self.progress_head_source == "vlm"
 
+    def _uses_vlm_dit_progress_head(self) -> bool:
+        return self.enable_progress_head and self.progress_head_source == "vlm_dit"
+
+    def uses_backbone_progress_token(self) -> bool:
+        return self._uses_vlm_dit_progress_head()
+
+    def make_backbone_progress_token(
+        self,
+        batch_size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        return self._make_progress_features(
+            batch_size=batch_size,
+            position_index=0,
+            device=device,
+            dtype=self.progress_token.dtype,
+        )
+
     def _compute_vlm_progress_hidden(self, backbone_output: BatchFeature) -> torch.Tensor:
         backbone_features = backbone_output["backbone_features"]
         progress_features = self._make_progress_features(
@@ -236,6 +265,34 @@ class Gr00tN1d7ActionHead(nn.Module):
         vlm_progress_features = self.vlln(vlm_progress_features)
         vlm_progress_features = self.vl_self_attention(vlm_progress_features)
         return vlm_progress_features[:, -1]
+
+    def _compute_vlm_dit_progress_hidden(
+        self,
+        state_features: torch.Tensor,
+        progress_backbone_output: BatchFeature,
+    ) -> torch.Tensor:
+        progress_backbone_output = self.process_backbone_output(progress_backbone_output)
+        progress_vl_embeds = progress_backbone_output.backbone_features
+        progress_token_index = progress_backbone_output.progress_token_index.to(
+            device=progress_vl_embeds.device,
+            dtype=torch.long,
+        )
+        batch_index = torch.arange(progress_vl_embeds.shape[0], device=progress_vl_embeds.device)
+        progress_vlm_hidden = progress_vl_embeds[batch_index, progress_token_index]
+        progress_query = self.progress_vlm_projector(progress_vlm_hidden).unsqueeze(1)
+        progress_sa_embs = torch.cat((state_features, progress_query), dim=1)
+        progress_timestep = torch.zeros(
+            progress_vl_embeds.shape[0],
+            dtype=torch.long,
+            device=progress_vl_embeds.device,
+        )
+        progress_output = self._run_model(
+            hidden_states=progress_sa_embs,
+            vl_embeds=progress_vl_embeds,
+            timestep=progress_timestep,
+            backbone_output=progress_backbone_output,
+        )
+        return progress_output[:, state_features.shape[1]]
 
     def _make_progress_features(
         self,
@@ -258,6 +315,9 @@ class Gr00tN1d7ActionHead(nn.Module):
         self.progress_token.register_hook(_sanitize_grad)
         for parameter in self.progress_head.parameters():
             parameter.register_hook(_sanitize_grad)
+        if hasattr(self, "progress_vlm_projector"):
+            for parameter in self.progress_vlm_projector.parameters():
+                parameter.register_hook(_sanitize_grad)
 
     def _make_progress_route_features(
         self,
@@ -332,7 +392,12 @@ class Gr00tN1d7ActionHead(nn.Module):
             )
             return torch.sigmoid(progress_pred).squeeze(-1)
 
-    def forward(self, backbone_output: BatchFeature, action_input: BatchFeature) -> BatchFeature:
+    def forward(
+        self,
+        backbone_output: BatchFeature,
+        action_input: BatchFeature,
+        progress_backbone_output: BatchFeature | None = None,
+    ) -> BatchFeature:
         """
         Forward pass through the action head.
 
@@ -356,6 +421,8 @@ class Gr00tN1d7ActionHead(nn.Module):
         vlm_progress_hidden = None
         if self._uses_vlm_progress_head():
             vlm_progress_hidden = self._compute_vlm_progress_hidden(backbone_output)
+        elif self._uses_vlm_dit_progress_head() and progress_backbone_output is None:
+            raise ValueError("progress_backbone_output is required for progress_head_source='vlm_dit'")
 
         backbone_output = self.process_backbone_output(backbone_output)
 
@@ -410,7 +477,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         action_end = action_start + actions.shape[1]
         progress_index = None
         progress_sa_embs = None
-        if self._uses_vlm_progress_head():
+        if self._uses_vlm_progress_head() or self._uses_vlm_dit_progress_head():
             sa_embs = torch.cat((state_features, action_features), dim=1)
         elif self.enable_progress_head and self.isolate_progress_action_attention:
             sa_embs = torch.cat((state_features, action_features), dim=1)
@@ -458,6 +525,12 @@ class Gr00tN1d7ActionHead(nn.Module):
         if self.enable_progress_head:
             if self._uses_vlm_progress_head():
                 progress_pred = self._predict_progress(vlm_progress_hidden)
+            elif self._uses_vlm_dit_progress_head():
+                progress_hidden = self._compute_vlm_dit_progress_hidden(
+                    state_features=state_features,
+                    progress_backbone_output=progress_backbone_output,
+                )
+                progress_pred = self._predict_progress(progress_hidden)
             else:
                 progress_output = model_output
                 if progress_sa_embs is not None:
@@ -486,7 +559,10 @@ class Gr00tN1d7ActionHead(nn.Module):
         return output
 
     def _encode_features(
-        self, backbone_output: BatchFeature, action_input: BatchFeature
+        self,
+        backbone_output: BatchFeature,
+        action_input: BatchFeature,
+        progress_backbone_output: BatchFeature | None = None,
     ) -> BatchFeature:
         """
         Encode features for the action head.
@@ -507,6 +583,8 @@ class Gr00tN1d7ActionHead(nn.Module):
         vlm_progress_hidden = None
         if self._uses_vlm_progress_head():
             vlm_progress_hidden = self._compute_vlm_progress_hidden(backbone_output)
+        elif self._uses_vlm_dit_progress_head() and progress_backbone_output is None:
+            raise ValueError("progress_backbone_output is required for progress_head_source='vlm_dit'")
 
         backbone_output = self.process_backbone_output(backbone_output)
 
@@ -527,6 +605,8 @@ class Gr00tN1d7ActionHead(nn.Module):
         features = {"backbone_features": vl_embeds, "state_features": state_features}
         if vlm_progress_hidden is not None:
             features["progress_hidden"] = vlm_progress_hidden
+        if self._uses_vlm_dit_progress_head():
+            features["progress_backbone_output"] = progress_backbone_output
         return BatchFeature(data=features)
 
     @torch.no_grad()
@@ -539,6 +619,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         action_input: BatchFeature,
         options: dict[str, Any] | None = None,
         progress_hidden: torch.Tensor | None = None,
+        progress_backbone_output: BatchFeature | None = None,
     ) -> BatchFeature:
         """
         Generate actions using the flow matching diffusion process.
@@ -565,6 +646,13 @@ class Gr00tN1d7ActionHead(nn.Module):
         progress_pred = None
         if self._uses_vlm_progress_head():
             assert progress_hidden is not None
+            progress_pred = self._predict_progress(progress_hidden)
+        elif self._uses_vlm_dit_progress_head():
+            assert progress_backbone_output is not None
+            progress_hidden = self._compute_vlm_dit_progress_hidden(
+                state_features=state_features,
+                progress_backbone_output=progress_backbone_output,
+            )
             progress_pred = self._predict_progress(progress_hidden)
 
         if "action" in action_input:
@@ -628,7 +716,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             action_end = action_start + self.action_horizon
             progress_index = None
             progress_sa_embs = None
-            if self._uses_vlm_progress_head():
+            if self._uses_vlm_progress_head() or self._uses_vlm_dit_progress_head():
                 sa_embs = torch.cat((state_features, action_features), dim=1)
             elif self.enable_progress_head and self.isolate_progress_action_attention:
                 sa_embs = torch.cat((state_features, action_features), dim=1)
@@ -662,7 +750,11 @@ class Gr00tN1d7ActionHead(nn.Module):
                 model_output[:, action_start:action_end],
                 embodiment_id,
             )
-            if self.enable_progress_head and not self._uses_vlm_progress_head():
+            if (
+                self.enable_progress_head
+                and not self._uses_vlm_progress_head()
+                and not self._uses_vlm_dit_progress_head()
+            ):
                 progress_output = model_output
                 if progress_sa_embs is not None:
                     progress_output = self._run_model(
@@ -691,6 +783,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         backbone_output: BatchFeature,
         action_input: BatchFeature,
         options: dict[str, Any] | None = None,
+        progress_backbone_output: BatchFeature | None = None,
     ) -> BatchFeature:
         """
         Generate actions using the flow matching diffusion process.
@@ -707,7 +800,11 @@ class Gr00tN1d7ActionHead(nn.Module):
             BatchFeature containing:
                 - action_pred: [B, action_horizon, action_dim] predicted actions
         """
-        features = self._encode_features(backbone_output, action_input)
+        features = self._encode_features(
+            backbone_output,
+            action_input,
+            progress_backbone_output=progress_backbone_output,
+        )
         return self.get_action_with_features(
             backbone_features=features.backbone_features,
             state_features=features.state_features,
@@ -716,6 +813,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             action_input=action_input,
             options=options,
             progress_hidden=features.get("progress_hidden"),
+            progress_backbone_output=features.get("progress_backbone_output"),
         )
 
     @property
@@ -840,7 +938,18 @@ class Gr00tN1d7(PreTrainedModel):
         # Prepare inputs for backbone and action head
         backbone_inputs, action_inputs = self.prepare_input(inputs)
         backbone_outputs = self.backbone(backbone_inputs)
-        action_outputs = self.action_head(backbone_outputs, action_inputs)
+        progress_backbone_outputs = None
+        if self.action_head.uses_backbone_progress_token():
+            progress_token = self.action_head.make_backbone_progress_token(
+                batch_size=backbone_inputs.input_ids.shape[0],
+                device=backbone_inputs.input_ids.device,
+            )
+            progress_backbone_outputs = self.backbone(backbone_inputs, progress_token=progress_token)
+        action_outputs = self.action_head(
+            backbone_outputs,
+            action_inputs,
+            progress_backbone_output=progress_backbone_outputs,
+        )
 
         return action_outputs
 
@@ -853,7 +962,19 @@ class Gr00tN1d7(PreTrainedModel):
 
         # Forward through backbone
         backbone_outputs = self.backbone(backbone_inputs)
-        action_outputs = self.action_head.get_action(backbone_outputs, action_inputs, options)
+        progress_backbone_outputs = None
+        if self.action_head.uses_backbone_progress_token():
+            progress_token = self.action_head.make_backbone_progress_token(
+                batch_size=backbone_inputs.input_ids.shape[0],
+                device=backbone_inputs.input_ids.device,
+            )
+            progress_backbone_outputs = self.backbone(backbone_inputs, progress_token=progress_token)
+        action_outputs = self.action_head.get_action(
+            backbone_outputs,
+            action_inputs,
+            options,
+            progress_backbone_output=progress_backbone_outputs,
+        )
 
         return action_outputs
 

@@ -83,7 +83,8 @@ class FinetuneConfig:
     progress_head_source: str = "action"
     """
     Progress feature source. Use "action" to read progress from the diffusion
-    token path, or "vlm" to read it from a vision-language-only query token.
+    token path, "vlm" to read it from a vision-language-only query token, or
+    "vlm_dit" to insert the query into System2 and run a progress-only DiT route.
     """
 
     isolate_progress_action_attention: bool = False

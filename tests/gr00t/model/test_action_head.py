@@ -74,6 +74,13 @@ def _make_backbone_output(config, batch_size=2, seq_len=8):
     )
 
 
+def _make_progress_backbone_output(config, batch_size=2, seq_len=9):
+    output = _make_backbone_output(config, batch_size=batch_size, seq_len=seq_len)
+    output["progress_token_index"] = torch.full((batch_size,), seq_len - 1, dtype=torch.long)
+    output["image_mask"][:, -1] = False
+    return output
+
+
 def _make_action_input(config, batch_size=2):
     data = {
         "state": torch.randn(batch_size, config.state_history_length, config.max_state_dim),
@@ -305,6 +312,52 @@ class TestActionHeadForward:
         assert backbone_attention.hidden_states[1].shape[1] == 8
         assert head.model.hidden_states.shape[1] == 1 + config.action_horizon
 
+    def test_vlm_dit_progress_head_uses_separate_progress_route(self):
+        class CaptureModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.hidden_states = []
+                self.encoder_hidden_states = []
+
+            def forward(self, hidden_states, **kwargs):
+                self.hidden_states.append(hidden_states.detach().clone())
+                self.encoder_hidden_states.append(
+                    kwargs["encoder_hidden_states"].detach().clone()
+                )
+                if kwargs.get("return_all_hidden_states"):
+                    return hidden_states, None
+                return hidden_states
+
+        class CaptureActionDecoder(torch.nn.Module):
+            def forward(self, hidden_states, embodiment_id):
+                return torch.zeros(
+                    hidden_states.shape[0],
+                    hidden_states.shape[1],
+                    config.max_action_dim,
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="vlm_dit",
+            add_pos_embed=False,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        head.model = CaptureModel()
+        head.action_decoder = CaptureActionDecoder()
+
+        head.forward(
+            _make_backbone_output(config),
+            _make_action_input(config),
+            progress_backbone_output=_make_progress_backbone_output(config),
+        )
+
+        assert head.model.hidden_states[0].shape[1] == 1 + config.action_horizon
+        assert head.model.hidden_states[1].shape[1] == 2
+        assert head.model.encoder_hidden_states[0].shape[1] == 8
+        assert head.model.encoder_hidden_states[1].shape[1] == 9
+
 
 class TestActionHeadGetAction:
     """Test inference denoising loop."""
@@ -401,6 +454,26 @@ class TestActionHeadTrainableParams:
         assert trainable
         assert all(
             name.startswith("progress_token") or name.startswith("progress_head")
+            for name in trainable
+        )
+
+    def test_vlm_dit_progress_only_leaves_only_progress_params_trainable(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="vlm_dit",
+            tune_projector=False,
+            tune_diffusion_model=False,
+            tune_vlln=False,
+            tune_progress_head=True,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        trainable = {name for name, p in head.named_parameters() if p.requires_grad}
+
+        assert trainable
+        assert all(
+            name.startswith("progress_token")
+            or name.startswith("progress_head")
+            or name.startswith("progress_vlm_projector")
             for name in trainable
         )
 
