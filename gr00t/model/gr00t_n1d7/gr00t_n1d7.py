@@ -494,7 +494,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             return_all_hidden_states=return_all_hidden_states,
         )
 
-    def _predict_progress(self, progress_hidden: torch.Tensor) -> torch.Tensor:
+    def _progress_logits(self, progress_hidden: torch.Tensor) -> torch.Tensor:
         progress_head_dtype = next(self.progress_head.parameters()).dtype
         device_type = progress_hidden.device.type
         with torch.autocast(device_type=device_type, enabled=False):
@@ -511,7 +511,10 @@ class Gr00tN1d7ActionHead(nn.Module):
                 posinf=30.0,
                 neginf=-30.0,
             )
-            return torch.sigmoid(progress_pred).squeeze(-1)
+            return progress_pred.squeeze(-1)
+
+    def _predict_progress(self, progress_hidden: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(self._progress_logits(progress_hidden))
 
     def forward(
         self,
@@ -666,13 +669,13 @@ class Gr00tN1d7ActionHead(nn.Module):
                 or self._uses_vlm_pooled_dit_progress_head()
                 or self._uses_state_multilayer_dit_progress_head()
             ):
-                progress_pred = self._predict_progress(vlm_progress_hidden)
+                progress_logits = self._progress_logits(vlm_progress_hidden)
             elif self._uses_vlm_dit_progress_head():
                 progress_hidden = self._compute_vlm_dit_progress_hidden(
                     state_features=state_features,
                     progress_backbone_output=progress_backbone_output,
                 )
-                progress_pred = self._predict_progress(progress_hidden)
+                progress_logits = self._progress_logits(progress_hidden)
             else:
                 progress_output = model_output
                 if progress_sa_embs is not None:
@@ -683,7 +686,8 @@ class Gr00tN1d7ActionHead(nn.Module):
                         backbone_output=backbone_output,
                         return_all_hidden_states=True,
                     )
-                progress_pred = self._predict_progress(progress_output[:, progress_index])
+                progress_logits = self._progress_logits(progress_output[:, progress_index])
+            progress_pred = torch.sigmoid(progress_logits)
             output["progress_pred"] = progress_pred
             if "progress" in action_input:
                 progress_target = action_input.progress.to(
@@ -691,7 +695,10 @@ class Gr00tN1d7ActionHead(nn.Module):
                     dtype=progress_pred.dtype,
                 ).view_as(progress_pred)
                 progress_target = progress_target.clamp(0.0, 1.0)
-                progress_loss = F.mse_loss(progress_pred, progress_target)
+                progress_loss = F.binary_cross_entropy_with_logits(
+                    progress_logits,
+                    progress_target,
+                )
                 output["progress_loss"] = progress_loss
                 if self.optimize_action_loss:
                     output["loss"] = loss + self.progress_loss_weight * progress_loss
