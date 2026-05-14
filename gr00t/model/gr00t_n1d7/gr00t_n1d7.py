@@ -88,19 +88,25 @@ class Gr00tN1d7ActionHead(nn.Module):
             "vlm",
             "vlm_dit",
             "vlm_pooled_dit",
+            "state_multilayer_dit",
             "vlm_pooled",
             "vlm_pooled_state",
         }:
             raise ValueError(
                 f"Unsupported progress_head_source={self.progress_head_source!r}; "
                 "expected 'action', 'vlm', 'vlm_dit', 'vlm_pooled_dit', "
-                "'vlm_pooled', or 'vlm_pooled_state'."
+                "'state_multilayer_dit', 'vlm_pooled', or 'vlm_pooled_state'."
             )
         self.isolate_progress_action_attention = getattr(
             config, "isolate_progress_action_attention", False
         )
         if self.enable_progress_head:
-            use_progress_token = self.progress_head_source in {"action", "vlm", "vlm_dit"}
+            use_progress_token = self.progress_head_source in {
+                "action",
+                "vlm",
+                "vlm_dit",
+                "state_multilayer_dit",
+            }
             progress_token_dim = (
                 config.backbone_embedding_dim
                 if self.progress_head_source in {"vlm", "vlm_dit"}
@@ -110,6 +116,8 @@ class Gr00tN1d7ActionHead(nn.Module):
                 progress_head_dim = config.backbone_embedding_dim
             elif self.progress_head_source == "vlm_pooled_state":
                 progress_head_dim = config.backbone_embedding_dim + self.input_embedding_dim
+            elif self.progress_head_source == "state_multilayer_dit":
+                progress_head_dim = self._progress_multilayer_feature_dim()
             else:
                 progress_head_dim = self.hidden_size
             if use_progress_token:
@@ -123,16 +131,24 @@ class Gr00tN1d7ActionHead(nn.Module):
                 )
                 nn.init.xavier_uniform_(self.progress_vlm_projector.weight)
                 nn.init.zeros_(self.progress_vlm_projector.bias)
-            self.progress_head = nn.Sequential(
-                nn.LayerNorm(progress_head_dim),
-                nn.Linear(progress_head_dim, progress_head_dim),
-                nn.GELU(),
-                nn.Linear(progress_head_dim, 1),
-            )
-            nn.init.xavier_uniform_(self.progress_head[1].weight)
-            nn.init.zeros_(self.progress_head[1].bias)
-            nn.init.zeros_(self.progress_head[3].weight)
-            nn.init.zeros_(self.progress_head[3].bias)
+            if self.progress_head_source == "state_multilayer_dit":
+                self.progress_head = nn.Sequential(
+                    nn.LayerNorm(progress_head_dim),
+                    nn.Linear(progress_head_dim, 1),
+                )
+                nn.init.zeros_(self.progress_head[1].weight)
+                nn.init.zeros_(self.progress_head[1].bias)
+            else:
+                self.progress_head = nn.Sequential(
+                    nn.LayerNorm(progress_head_dim),
+                    nn.Linear(progress_head_dim, progress_head_dim),
+                    nn.GELU(),
+                    nn.Linear(progress_head_dim, 1),
+                )
+                nn.init.xavier_uniform_(self.progress_head[1].weight)
+                nn.init.zeros_(self.progress_head[1].bias)
+                nn.init.zeros_(self.progress_head[3].weight)
+                nn.init.zeros_(self.progress_head[3].bias)
             self._register_progress_gradient_sanitizers()
 
         self.vlln = (
@@ -253,6 +269,9 @@ class Gr00tN1d7ActionHead(nn.Module):
     def _uses_vlm_pooled_dit_progress_head(self) -> bool:
         return self.enable_progress_head and self.progress_head_source == "vlm_pooled_dit"
 
+    def _uses_state_multilayer_dit_progress_head(self) -> bool:
+        return self.enable_progress_head and self.progress_head_source == "state_multilayer_dit"
+
     def _uses_vlm_pooled_progress_head(self) -> bool:
         return self.enable_progress_head and self.progress_head_source in {
             "vlm_pooled",
@@ -264,6 +283,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             self._uses_vlm_progress_head()
             or self._uses_vlm_dit_progress_head()
             or self._uses_vlm_pooled_dit_progress_head()
+            or self._uses_state_multilayer_dit_progress_head()
             or self._uses_vlm_pooled_progress_head()
         )
 
@@ -343,6 +363,36 @@ class Gr00tN1d7ActionHead(nn.Module):
             backbone_output=backbone_output,
         )
         return progress_output[:, state_features.shape[1]]
+
+    def _progress_multilayer_feature_dim(self) -> int:
+        return (self.model.config.num_layers + 1) * self.model.inner_dim
+
+    def _compute_state_multilayer_dit_progress_hidden(
+        self,
+        state_features: torch.Tensor,
+        backbone_output: BatchFeature,
+    ) -> torch.Tensor:
+        progress_features = self._make_progress_features(
+            batch_size=state_features.shape[0],
+            position_index=state_features.shape[1],
+            device=state_features.device,
+            dtype=state_features.dtype,
+        )
+        progress_sa_embs = torch.cat((state_features, progress_features), dim=1)
+        progress_timestep = torch.zeros(
+            state_features.shape[0],
+            dtype=torch.long,
+            device=state_features.device,
+        )
+        _, all_hidden_states = self._run_model(
+            hidden_states=progress_sa_embs,
+            vl_embeds=backbone_output.backbone_features,
+            timestep=progress_timestep,
+            backbone_output=backbone_output,
+            return_all_hidden_states=True,
+        )
+        progress_index = state_features.shape[1]
+        return torch.cat([hidden[:, progress_index] for hidden in all_hidden_states], dim=-1)
 
     def _pool_vlm_features(self, backbone_output: BatchFeature) -> torch.Tensor:
         backbone_features = backbone_output.backbone_features
@@ -530,6 +580,11 @@ class Gr00tN1d7ActionHead(nn.Module):
                 state_features=state_features,
                 backbone_output=backbone_output,
             )
+        elif self._uses_state_multilayer_dit_progress_head():
+            vlm_progress_hidden = self._compute_state_multilayer_dit_progress_hidden(
+                state_features=state_features,
+                backbone_output=backbone_output,
+            )
 
         # Embed noised action trajectory.
         actions = action_input.action
@@ -609,6 +664,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 self._uses_vlm_progress_head()
                 or self._uses_vlm_pooled_progress_head()
                 or self._uses_vlm_pooled_dit_progress_head()
+                or self._uses_state_multilayer_dit_progress_head()
             ):
                 progress_pred = self._predict_progress(vlm_progress_hidden)
             elif self._uses_vlm_dit_progress_head():
@@ -698,6 +754,11 @@ class Gr00tN1d7ActionHead(nn.Module):
                 state_features=state_features,
                 backbone_output=backbone_output,
             )
+        elif self._uses_state_multilayer_dit_progress_head():
+            vlm_progress_hidden = self._compute_state_multilayer_dit_progress_hidden(
+                state_features=state_features,
+                backbone_output=backbone_output,
+            )
 
         features = {"backbone_features": vl_embeds, "state_features": state_features}
         if vlm_progress_hidden is not None:
@@ -745,6 +806,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             self._uses_vlm_progress_head()
             or self._uses_vlm_pooled_progress_head()
             or self._uses_vlm_pooled_dit_progress_head()
+            or self._uses_state_multilayer_dit_progress_head()
         ):
             assert progress_hidden is not None
             progress_pred = self._predict_progress(progress_hidden)

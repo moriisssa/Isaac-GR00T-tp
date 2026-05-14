@@ -171,6 +171,30 @@ class TestActionHeadForward:
         assert hasattr(head, "progress_vlm_projector")
         assert head.progress_head[0].normalized_shape == (config.hidden_size,)
 
+    def test_forward_with_state_multilayer_dit_progress_head(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="state_multilayer_dit",
+        )
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        inner_dim = (
+            config.diffusion_model_cfg["num_attention_heads"]
+            * config.diffusion_model_cfg["attention_head_dim"]
+        )
+        expected_dim = (config.diffusion_model_cfg["num_layers"] + 1) * inner_dim
+
+        assert "progress_pred" in out
+        assert "progress_loss" in out
+        assert out["progress_pred"].shape == (2,)
+        assert torch.isfinite(out["loss"])
+        assert hasattr(head, "progress_token")
+        assert not hasattr(head, "progress_vlm_projector")
+        assert len(head.progress_head) == 2
+        assert head.progress_head[0].normalized_shape == (expected_dim,)
+
     def test_progress_only_training_loss_excludes_action_loss(self):
         config = _small_config(
             enable_progress_head=True,
@@ -434,6 +458,53 @@ class TestActionHeadForward:
         assert head.model.encoder_hidden_states[0].shape[1] == 8
         assert head.model.encoder_hidden_states[1].shape[1] == 8
 
+    def test_state_multilayer_dit_progress_head_uses_state_progress_route(self):
+        class CaptureModel(torch.nn.Module):
+            def __init__(self, num_layers):
+                super().__init__()
+                self.num_layers = num_layers
+                self.hidden_states = []
+                self.encoder_hidden_states = []
+
+            def forward(self, hidden_states, **kwargs):
+                self.hidden_states.append(hidden_states.detach().clone())
+                self.encoder_hidden_states.append(
+                    kwargs["encoder_hidden_states"].detach().clone()
+                )
+                if kwargs.get("return_all_hidden_states"):
+                    all_hidden_states = [
+                        hidden_states + float(layer_idx)
+                        for layer_idx in range(self.num_layers + 1)
+                    ]
+                    return hidden_states, all_hidden_states
+                return hidden_states
+
+        class CaptureActionDecoder(torch.nn.Module):
+            def forward(self, hidden_states, embodiment_id):
+                return torch.zeros(
+                    hidden_states.shape[0],
+                    hidden_states.shape[1],
+                    config.max_action_dim,
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="state_multilayer_dit",
+            add_pos_embed=False,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        head.model = CaptureModel(config.diffusion_model_cfg["num_layers"])
+        head.action_decoder = CaptureActionDecoder()
+
+        head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        assert head.model.hidden_states[0].shape[1] == 2
+        assert head.model.hidden_states[1].shape[1] == 1 + config.action_horizon
+        assert head.model.encoder_hidden_states[0].shape[1] == 8
+        assert head.model.encoder_hidden_states[1].shape[1] == 8
+
     @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
     def test_vlm_pooled_progress_head_does_not_add_action_token(self, source):
         class CaptureModel(torch.nn.Module):
@@ -621,6 +692,24 @@ class TestActionHeadTrainableParams:
         assert trainable
         assert all(
             name.startswith("progress_head") or name.startswith("progress_vlm_projector")
+            for name in trainable
+        )
+
+    def test_state_multilayer_dit_progress_only_leaves_only_progress_params_trainable(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="state_multilayer_dit",
+            tune_projector=False,
+            tune_diffusion_model=False,
+            tune_vlln=False,
+            tune_progress_head=True,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        trainable = {name for name, p in head.named_parameters() if p.requires_grad}
+
+        assert trainable
+        assert all(
+            name.startswith("progress_token") or name.startswith("progress_head")
             for name in trainable
         )
 
