@@ -116,7 +116,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 progress_head_dim = config.backbone_embedding_dim
             elif self.progress_head_source == "vlm_pooled_state":
                 progress_head_dim = config.backbone_embedding_dim + self.input_embedding_dim
-            elif self.progress_head_source == "state_multilayer_dit":
+            elif self.progress_head_source in {"vlm_pooled_dit", "state_multilayer_dit"}:
                 progress_head_dim = self._progress_multilayer_feature_dim()
             else:
                 progress_head_dim = self.hidden_size
@@ -131,7 +131,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 )
                 nn.init.xavier_uniform_(self.progress_vlm_projector.weight)
                 nn.init.zeros_(self.progress_vlm_projector.bias)
-            if self.progress_head_source == "state_multilayer_dit":
+            if self.progress_head_source in {"vlm_pooled_dit", "state_multilayer_dit"}:
                 self.progress_head = nn.Sequential(
                     nn.LayerNorm(progress_head_dim),
                     nn.Linear(progress_head_dim, 1),
@@ -356,13 +356,15 @@ class Gr00tN1d7ActionHead(nn.Module):
             dtype=torch.long,
             device=pooled_features.device,
         )
-        progress_output = self._run_model(
+        _, all_hidden_states = self._run_model(
             hidden_states=progress_sa_embs,
             vl_embeds=backbone_output.backbone_features,
             timestep=progress_timestep,
             backbone_output=backbone_output,
+            return_all_hidden_states=True,
         )
-        return progress_output[:, state_features.shape[1]]
+        progress_index = state_features.shape[1]
+        return torch.cat([hidden[:, progress_index] for hidden in all_hidden_states], dim=-1)
 
     def _progress_multilayer_feature_dim(self) -> int:
         return (self.model.config.num_layers + 1) * self.model.inner_dim

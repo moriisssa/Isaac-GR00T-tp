@@ -123,7 +123,8 @@ class Gr00tN1d7Config(PretrainedConfig):
     # append a learned progress token after action tokens ("action"), append a
     # learned query to the vision-language features only ("vlm"), run a
     # progress-only DiT route over progress-aware VLM features ("vlm_dit"), or
-    # run a progress-only DiT route from pooled VLM features ("vlm_pooled_dit"),
+    # run a progress-only DiT route from pooled VLM features and regress from
+    # the query's concatenated per-layer features ("vlm_pooled_dit"),
     # run a progress-only DiT route from state plus a learned token and regress
     # from that token's concatenated per-layer features ("state_multilayer_dit"),
     # or regress from pooled VLM features with optional state features.

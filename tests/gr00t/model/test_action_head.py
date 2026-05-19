@@ -169,7 +169,13 @@ class TestActionHeadForward:
         assert torch.isfinite(out["loss"])
         assert not hasattr(head, "progress_token")
         assert hasattr(head, "progress_vlm_projector")
-        assert head.progress_head[0].normalized_shape == (config.hidden_size,)
+        inner_dim = (
+            config.diffusion_model_cfg["num_attention_heads"]
+            * config.diffusion_model_cfg["attention_head_dim"]
+        )
+        expected_dim = (config.diffusion_model_cfg["num_layers"] + 1) * inner_dim
+        assert len(head.progress_head) == 2
+        assert head.progress_head[0].normalized_shape == (expected_dim,)
 
     def test_forward_with_state_multilayer_dit_progress_head(self):
         config = _small_config(
@@ -418,8 +424,9 @@ class TestActionHeadForward:
 
     def test_vlm_pooled_dit_progress_head_uses_pooled_progress_route(self):
         class CaptureModel(torch.nn.Module):
-            def __init__(self):
+            def __init__(self, num_layers):
                 super().__init__()
+                self.num_layers = num_layers
                 self.hidden_states = []
                 self.encoder_hidden_states = []
 
@@ -429,7 +436,11 @@ class TestActionHeadForward:
                     kwargs["encoder_hidden_states"].detach().clone()
                 )
                 if kwargs.get("return_all_hidden_states"):
-                    return hidden_states, None
+                    all_hidden_states = [
+                        hidden_states + float(layer_idx)
+                        for layer_idx in range(self.num_layers + 1)
+                    ]
+                    return hidden_states, all_hidden_states
                 return hidden_states
 
         class CaptureActionDecoder(torch.nn.Module):
@@ -448,7 +459,7 @@ class TestActionHeadForward:
             add_pos_embed=False,
         )
         head = Gr00tN1d7ActionHead(config)
-        head.model = CaptureModel()
+        head.model = CaptureModel(config.diffusion_model_cfg["num_layers"])
         head.action_decoder = CaptureActionDecoder()
 
         head.forward(_make_backbone_output(config), _make_action_input(config))
