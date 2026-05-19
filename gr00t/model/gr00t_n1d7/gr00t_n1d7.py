@@ -117,7 +117,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             elif self.progress_head_source == "vlm_pooled_state":
                 progress_head_dim = config.backbone_embedding_dim + self.input_embedding_dim
             elif self.progress_head_source in {"vlm_pooled_dit", "state_multilayer_dit"}:
-                progress_head_dim = self._progress_multilayer_feature_dim()
+                progress_head_dim = self.hidden_size
             else:
                 progress_head_dim = self.hidden_size
             if use_progress_token:
@@ -356,18 +356,14 @@ class Gr00tN1d7ActionHead(nn.Module):
             dtype=torch.long,
             device=pooled_features.device,
         )
-        _, all_hidden_states = self._run_model(
+        progress_output = self._run_model(
             hidden_states=progress_sa_embs,
             vl_embeds=backbone_output.backbone_features,
             timestep=progress_timestep,
             backbone_output=backbone_output,
-            return_all_hidden_states=True,
         )
         progress_index = state_features.shape[1]
-        return torch.cat([hidden[:, progress_index] for hidden in all_hidden_states], dim=-1)
-
-    def _progress_multilayer_feature_dim(self) -> int:
-        return (self.model.config.num_layers + 1) * self.model.inner_dim
+        return progress_output[:, progress_index]
 
     def _compute_state_multilayer_dit_progress_hidden(
         self,
@@ -386,15 +382,14 @@ class Gr00tN1d7ActionHead(nn.Module):
             dtype=torch.long,
             device=state_features.device,
         )
-        _, all_hidden_states = self._run_model(
+        progress_output = self._run_model(
             hidden_states=progress_sa_embs,
             vl_embeds=backbone_output.backbone_features,
             timestep=progress_timestep,
             backbone_output=backbone_output,
-            return_all_hidden_states=True,
         )
         progress_index = state_features.shape[1]
-        return torch.cat([hidden[:, progress_index] for hidden in all_hidden_states], dim=-1)
+        return progress_output[:, progress_index]
 
     def _pool_vlm_features(self, backbone_output: BatchFeature) -> torch.Tensor:
         backbone_features = backbone_output.backbone_features

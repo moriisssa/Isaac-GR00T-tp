@@ -124,9 +124,9 @@ class Gr00tN1d7Config(PretrainedConfig):
     # learned query to the vision-language features only ("vlm"), run a
     # progress-only DiT route over progress-aware VLM features ("vlm_dit"), or
     # run a progress-only DiT route from pooled VLM features and regress from
-    # the query's concatenated per-layer features ("vlm_pooled_dit"),
+    # the final query-token feature ("vlm_pooled_dit"),
     # run a progress-only DiT route from state plus a learned token and regress
-    # from that token's concatenated per-layer features ("state_multilayer_dit"),
+    # from that token's final feature ("state_multilayer_dit"),
     # or regress from pooled VLM features with optional state features.
     # Labels are normalized to [0, 1], and the MLP prediction head is
     # sigmoid-clamped to the same range.

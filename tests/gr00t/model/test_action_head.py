@@ -169,13 +169,8 @@ class TestActionHeadForward:
         assert torch.isfinite(out["loss"])
         assert not hasattr(head, "progress_token")
         assert hasattr(head, "progress_vlm_projector")
-        inner_dim = (
-            config.diffusion_model_cfg["num_attention_heads"]
-            * config.diffusion_model_cfg["attention_head_dim"]
-        )
-        expected_dim = (config.diffusion_model_cfg["num_layers"] + 1) * inner_dim
         assert len(head.progress_head) == 2
-        assert head.progress_head[0].normalized_shape == (expected_dim,)
+        assert head.progress_head[0].normalized_shape == (config.hidden_size,)
 
     def test_forward_with_state_multilayer_dit_progress_head(self):
         config = _small_config(
@@ -186,12 +181,6 @@ class TestActionHeadForward:
         head.train()
         out = head.forward(_make_backbone_output(config), _make_action_input(config))
 
-        inner_dim = (
-            config.diffusion_model_cfg["num_attention_heads"]
-            * config.diffusion_model_cfg["attention_head_dim"]
-        )
-        expected_dim = (config.diffusion_model_cfg["num_layers"] + 1) * inner_dim
-
         assert "progress_pred" in out
         assert "progress_loss" in out
         assert out["progress_pred"].shape == (2,)
@@ -199,7 +188,7 @@ class TestActionHeadForward:
         assert hasattr(head, "progress_token")
         assert not hasattr(head, "progress_vlm_projector")
         assert len(head.progress_head) == 2
-        assert head.progress_head[0].normalized_shape == (expected_dim,)
+        assert head.progress_head[0].normalized_shape == (config.hidden_size,)
 
     def test_progress_only_training_loss_excludes_action_loss(self):
         config = _small_config(

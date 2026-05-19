@@ -86,9 +86,9 @@ class FinetuneConfig:
     token path, "vlm" to read it from a vision-language-only query token,
     "vlm_dit" to insert the query into System2 and run a progress-only DiT route,
     "vlm_pooled_dit" to project pooled System2 features into a progress-only DiT
-    route and regress from the query's concatenated per-layer features,
+    route and regress from the query's final token feature,
     "state_multilayer_dit" to run a progress-only DiT route from state
-    plus a learned token and regress from its concatenated per-layer features,
+    plus a learned token and regress from its final token feature,
     "vlm_pooled" to regress from pooled System2 features, or
     "vlm_pooled_state" to concatenate pooled System2 features with the frozen
     robot-state embedding.
