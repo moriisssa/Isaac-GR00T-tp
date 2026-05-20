@@ -40,6 +40,7 @@ def _make_mock_config():
     config.data.seed = 42
     config.data.allow_padding = False
     config.data.progress_target = "current"
+    config.data.tail_shrink_action_chunk = False
     config.data.num_shards_per_epoch = 100
     config.data.override_pretraining_statistics = False
 

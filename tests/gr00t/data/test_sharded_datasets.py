@@ -311,6 +311,38 @@ class TestShardedSingleStepDataset:
         # effective = 50 - 8 + 1 = 43
         assert dataset.get_effective_episode_length(0) == 43
 
+    def test_tail_shrink_action_chunk_keeps_tail_steps(self):
+        from gr00t.data.embodiment_tags import EmbodimentTag
+        from gr00t.data.types import ModalityConfig
+
+        modality_configs = {
+            "video": ModalityConfig(delta_indices=[0], modality_keys=["cam"]),
+            "state": ModalityConfig(delta_indices=[0], modality_keys=["x"]),
+            "action": ModalityConfig(delta_indices=list(range(8)), modality_keys=["x"]),
+            "language": ModalityConfig(delta_indices=[0], modality_keys=["task"]),
+        }
+
+        with patch(
+            "gr00t.data.dataset.sharded_single_step_dataset.LeRobotEpisodeLoader"
+        ) as MockLoader:
+            mock_loader = MagicMock()
+            mock_loader.episode_lengths = [50]
+            mock_loader.get_episode_length = lambda idx: 50
+            MockLoader.return_value = mock_loader
+
+            from gr00t.data.dataset.sharded_single_step_dataset import ShardedSingleStepDataset
+
+            dataset = ShardedSingleStepDataset(
+                dataset_path="/fake/dataset",
+                embodiment_tag=EmbodimentTag.NEW_EMBODIMENT,
+                modality_configs=modality_configs,
+                shard_size=1024,
+                episode_sampling_rate=1.0,
+                tail_shrink_action_chunk=True,
+            )
+
+        assert dataset.get_effective_episode_length(0) == 50
+
     def test_progress_label_from_timestamp(self):
         from gr00t.data.dataset.sharded_single_step_dataset import compute_progress_label
 
@@ -334,3 +366,39 @@ class TestShardedSingleStepDataset:
             target="chunk_end",
         )
         np.testing.assert_allclose(progress, np.array([0.75], dtype=np.float32))
+
+    def test_extract_step_data_tail_shrink_action_chunk(self):
+        from gr00t.data.dataset.sharded_single_step_dataset import extract_step_data
+        from gr00t.data.embodiment_tags import EmbodimentTag
+        from gr00t.data.types import ModalityConfig
+
+        modality_configs = {
+            "video": ModalityConfig(delta_indices=[0], modality_keys=["cam"]),
+            "state": ModalityConfig(delta_indices=[0], modality_keys=["x"]),
+            "action": ModalityConfig(delta_indices=list(range(3)), modality_keys=["x"]),
+            "language": ModalityConfig(delta_indices=[0], modality_keys=["task"]),
+        }
+        episode_data = pd.DataFrame(
+            {
+                "video.cam": [np.array([idx]) for idx in range(5)],
+                "state.x": [np.array([idx], dtype=np.float32) for idx in range(5)],
+                "action.x": [np.array([idx], dtype=np.float32) for idx in range(5)],
+                "language.task": ["pick"] * 5,
+                "frame_index": list(range(5)),
+            }
+        )
+
+        step_data = extract_step_data(
+            episode_data,
+            step_index=3,
+            modality_configs=modality_configs,
+            embodiment_tag=EmbodimentTag.NEW_EMBODIMENT,
+            progress_target="chunk_end",
+            tail_shrink_action_chunk=True,
+        )
+
+        assert step_data.actions["x"].shape == (2, 1)
+        np.testing.assert_array_equal(step_data.actions["x"].reshape(-1), np.array([3.0, 4.0]))
+        np.testing.assert_allclose(
+            step_data.metadata["progress"], np.array([1.0], dtype=np.float32)
+        )

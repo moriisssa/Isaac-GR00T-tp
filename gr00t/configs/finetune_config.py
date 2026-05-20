@@ -121,6 +121,12 @@ class FinetuneConfig:
     "chunk_end" for progress at the end of the action chunk.
     """
 
+    tail_shrink_action_chunk: bool = False
+    """
+    If True, include tail observations by shortening the final action chunks instead
+    of dropping the last action_horizon - 1 observations from each episode.
+    """
+
     # --- Data Augmentation ---
     random_rotation_angle: int | None = None
     """Maximum rotation angle (in degrees) for random rotation augmentation of input images."""

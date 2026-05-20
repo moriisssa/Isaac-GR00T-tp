@@ -72,6 +72,7 @@ class DatasetFactory:
                     seed=self.config.data.seed,
                     allow_padding=self.config.data.allow_padding,
                     progress_target=self.config.data.progress_target,
+                    tail_shrink_action_chunk=self.config.data.tail_shrink_action_chunk,
                 )
                 datasets.append(dataset)
             dataset_lengths = np.array([len(dataset) for dataset in datasets])

@@ -76,15 +76,25 @@ def extract_step_data(
     embodiment_tag: EmbodimentTag,
     allow_padding: bool = False,
     progress_target: str = "current",
+    tail_shrink_action_chunk: bool = False,
 ) -> VLAStepData:
     step_data = {}
+    action_horizon_for_label = len(modality_configs["action"].delta_indices)
 
     # Extract data for each configured modality
     for modality, config in modality_configs.items():
         step_data[modality] = {}
         # Sample timesteps according to delta indices configuration
         indices_to_load = [step_index + delta_index for delta_index in config.delta_indices]
-        if allow_padding:
+        if tail_shrink_action_chunk and modality == "action":
+            valid_delta_indices = [
+                delta_index
+                for delta_index in config.delta_indices
+                if 0 <= step_index + delta_index < len(episode_data)
+            ]
+            indices_to_load = [step_index + delta_index for delta_index in valid_delta_indices]
+            action_horizon_for_label = max(valid_delta_indices) + 1
+        elif allow_padding:
             indices_to_load = [max(0, min(idx, len(episode_data) - 1)) for idx in indices_to_load]
         for key in config.modality_keys:
             if f"{modality}.{key}" in episode_data.columns:
@@ -125,7 +135,7 @@ def extract_step_data(
             "progress": compute_progress_label(
                 episode_data,
                 step_index,
-                action_horizon=len(modality_configs["action"].delta_indices),
+                action_horizon=action_horizon_for_label,
                 target=progress_target,
             )
         },
@@ -194,6 +204,7 @@ class ShardedSingleStepDataset(ShardedDataset):
         seed: int = 42,
         allow_padding: bool = False,
         progress_target: str = "current",
+        tail_shrink_action_chunk: bool = False,
     ):
         """Initialize single-step dataset with sharding configuration."""
         super().__init__(dataset_path)
@@ -206,6 +217,7 @@ class ShardedSingleStepDataset(ShardedDataset):
         self.seed = seed
         self.allow_padding = allow_padding
         self.progress_target = progress_target
+        self.tail_shrink_action_chunk = tail_shrink_action_chunk
         self.processor = None
         self.rng = np.random.default_rng(seed)
         action_delta_indices = modality_configs["action"].delta_indices
@@ -280,6 +292,8 @@ class ShardedSingleStepDataset(ShardedDataset):
     def get_effective_episode_length(self, episode_index: int) -> int:
         """Get the effective episode length accounting for action horizon."""
         original_length = self.episode_loader.get_episode_length(episode_index)
+        if self.tail_shrink_action_chunk:
+            return original_length
         return max(0, original_length - self.action_horizon + 1)
 
     def __len__(self):
@@ -311,6 +325,7 @@ class ShardedSingleStepDataset(ShardedDataset):
             self.embodiment_tag,
             self.allow_padding,
             progress_target=self.progress_target,
+            tail_shrink_action_chunk=self.tail_shrink_action_chunk,
         )
         # Apply processor to convert to model inputs
         messages = [{"type": MessageType.EPISODE_STEP.value, "content": vla_step_data}]

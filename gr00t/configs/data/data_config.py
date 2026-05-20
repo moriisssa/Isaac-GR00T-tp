@@ -87,6 +87,8 @@ class DataConfig:
     allow_padding: bool = False
     progress_target: str = "current"
     """Auxiliary progress label target: 'current' observation progress or 'chunk_end' progress."""
+    tail_shrink_action_chunk: bool = False
+    """If True, keep tail observations by shortening action chunks near episode end."""
 
     # Subsample ratio for the dataset
     subsample_ratio: float = 1.0

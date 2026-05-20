@@ -122,6 +122,7 @@ if __name__ == "__main__":
     config.data.episode_sampling_rate = ft_config.episode_sampling_rate
     config.data.num_shards_per_epoch = ft_config.num_shards_per_epoch
     config.data.progress_target = ft_config.progress_target
+    config.data.tail_shrink_action_chunk = ft_config.tail_shrink_action_chunk
 
     config.training.save_only_model = ft_config.save_only_model
     config.training.skip_weight_loading = ft_config.skip_weight_loading
