@@ -131,7 +131,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 )
                 nn.init.xavier_uniform_(self.progress_vlm_projector.weight)
                 nn.init.zeros_(self.progress_vlm_projector.bias)
-            if self.progress_head_source in {"vlm_pooled_dit", "state_multilayer_dit"}:
+            if self.progress_head_source == "state_multilayer_dit":
                 self.progress_head = nn.Sequential(
                     nn.LayerNorm(progress_head_dim),
                     nn.Linear(progress_head_dim, 1),

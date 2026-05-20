@@ -169,7 +169,7 @@ class TestActionHeadForward:
         assert torch.isfinite(out["loss"])
         assert not hasattr(head, "progress_token")
         assert hasattr(head, "progress_vlm_projector")
-        assert len(head.progress_head) == 2
+        assert len(head.progress_head) == 4
         assert head.progress_head[0].normalized_shape == (config.hidden_size,)
 
     def test_forward_with_state_multilayer_dit_progress_head(self):
