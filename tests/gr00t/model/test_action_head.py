@@ -172,6 +172,41 @@ class TestActionHeadForward:
         assert len(head.progress_head) == 2
         assert head.progress_head[0].normalized_shape == (config.hidden_size,)
 
+    def test_forward_with_soft_bin_progress_head(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="vlm_pooled_dit",
+            progress_output_type="soft_bins",
+            progress_num_bins=10,
+            progress_soft_label_sigma=0.08,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        assert "progress_pred" in out
+        assert "progress_loss" in out
+        assert out["progress_pred"].shape == (2,)
+        assert torch.allclose(out["progress_pred"], torch.full_like(out["progress_pred"], 0.5))
+        assert torch.isfinite(out["loss"])
+        assert head.progress_head[1].out_features == config.progress_num_bins
+
+    def test_soft_progress_targets_are_normalized(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_output_type="soft_bins",
+            progress_num_bins=10,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        target = torch.tensor([0.0, 0.37, 1.0])
+
+        soft_targets = head._make_soft_progress_targets(target)
+
+        assert soft_targets.shape == (3, config.progress_num_bins)
+        assert torch.allclose(soft_targets.sum(dim=-1), torch.ones(3))
+        assert soft_targets[0].argmax() == 0
+        assert soft_targets[-1].argmax() == config.progress_num_bins - 1
+
     def test_forward_with_state_multilayer_dit_progress_head(self):
         config = _small_config(
             enable_progress_head=True,
@@ -374,9 +409,7 @@ class TestActionHeadForward:
 
             def forward(self, hidden_states, **kwargs):
                 self.hidden_states.append(hidden_states.detach().clone())
-                self.encoder_hidden_states.append(
-                    kwargs["encoder_hidden_states"].detach().clone()
-                )
+                self.encoder_hidden_states.append(kwargs["encoder_hidden_states"].detach().clone())
                 if kwargs.get("return_all_hidden_states"):
                     return hidden_states, None
                 return hidden_states
@@ -421,13 +454,10 @@ class TestActionHeadForward:
 
             def forward(self, hidden_states, **kwargs):
                 self.hidden_states.append(hidden_states.detach().clone())
-                self.encoder_hidden_states.append(
-                    kwargs["encoder_hidden_states"].detach().clone()
-                )
+                self.encoder_hidden_states.append(kwargs["encoder_hidden_states"].detach().clone())
                 if kwargs.get("return_all_hidden_states"):
                     all_hidden_states = [
-                        hidden_states + float(layer_idx)
-                        for layer_idx in range(self.num_layers + 1)
+                        hidden_states + float(layer_idx) for layer_idx in range(self.num_layers + 1)
                     ]
                     return hidden_states, all_hidden_states
                 return hidden_states
@@ -468,13 +498,10 @@ class TestActionHeadForward:
 
             def forward(self, hidden_states, **kwargs):
                 self.hidden_states.append(hidden_states.detach().clone())
-                self.encoder_hidden_states.append(
-                    kwargs["encoder_hidden_states"].detach().clone()
-                )
+                self.encoder_hidden_states.append(kwargs["encoder_hidden_states"].detach().clone())
                 if kwargs.get("return_all_hidden_states"):
                     all_hidden_states = [
-                        hidden_states + float(layer_idx)
-                        for layer_idx in range(self.num_layers + 1)
+                        hidden_states + float(layer_idx) for layer_idx in range(self.num_layers + 1)
                     ]
                     return hidden_states, all_hidden_states
                 return hidden_states

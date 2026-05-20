@@ -83,6 +83,18 @@ class Gr00tN1d7ActionHead(nn.Module):
         self.enable_progress_head = config.enable_progress_head
         self.progress_loss_weight = config.progress_loss_weight
         self.progress_head_source = getattr(config, "progress_head_source", "action").lower()
+        self.progress_output_type = getattr(config, "progress_output_type", "scalar").lower()
+        if self.progress_output_type not in {"scalar", "soft_bins"}:
+            raise ValueError(
+                f"Unsupported progress_output_type={self.progress_output_type!r}; "
+                "expected 'scalar' or 'soft_bins'."
+            )
+        self.progress_num_bins = int(getattr(config, "progress_num_bins", 10))
+        if self.progress_num_bins < 2:
+            raise ValueError("progress_num_bins must be at least 2.")
+        self.progress_soft_label_sigma = float(getattr(config, "progress_soft_label_sigma", 0.08))
+        if self.progress_soft_label_sigma <= 0:
+            raise ValueError("progress_soft_label_sigma must be positive.")
         if self.progress_head_source not in {
             "action",
             "vlm",
@@ -101,6 +113,16 @@ class Gr00tN1d7ActionHead(nn.Module):
             config, "isolate_progress_action_attention", False
         )
         if self.enable_progress_head:
+            progress_output_dim = (
+                self.progress_num_bins if self.progress_output_type == "soft_bins" else 1
+            )
+            if self.progress_output_type == "soft_bins":
+                self.register_buffer(
+                    "progress_bin_centers",
+                    (torch.arange(self.progress_num_bins, dtype=torch.float32) + 0.5)
+                    / self.progress_num_bins,
+                    persistent=False,
+                )
             use_progress_token = self.progress_head_source in {
                 "action",
                 "vlm",
@@ -134,7 +156,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             if self.progress_head_source in {"vlm_pooled_dit", "state_multilayer_dit"}:
                 self.progress_head = nn.Sequential(
                     nn.LayerNorm(progress_head_dim),
-                    nn.Linear(progress_head_dim, 1),
+                    nn.Linear(progress_head_dim, progress_output_dim),
                 )
                 nn.init.zeros_(self.progress_head[1].weight)
                 nn.init.zeros_(self.progress_head[1].bias)
@@ -143,7 +165,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                     nn.LayerNorm(progress_head_dim),
                     nn.Linear(progress_head_dim, progress_head_dim),
                     nn.GELU(),
-                    nn.Linear(progress_head_dim, 1),
+                    nn.Linear(progress_head_dim, progress_output_dim),
                 )
                 nn.init.xavier_uniform_(self.progress_head[1].weight)
                 nn.init.zeros_(self.progress_head[1].bias)
@@ -508,10 +530,41 @@ class Gr00tN1d7ActionHead(nn.Module):
                 posinf=30.0,
                 neginf=-30.0,
             )
-            return progress_pred.squeeze(-1)
+            if self.progress_output_type == "scalar":
+                return progress_pred.squeeze(-1)
+            return progress_pred
 
     def _predict_progress(self, progress_hidden: torch.Tensor) -> torch.Tensor:
-        return torch.sigmoid(self._progress_logits(progress_hidden))
+        return self._progress_pred_from_logits(self._progress_logits(progress_hidden))
+
+    def _progress_pred_from_logits(self, progress_logits: torch.Tensor) -> torch.Tensor:
+        if self.progress_output_type == "scalar":
+            return torch.sigmoid(progress_logits)
+        bin_centers = self.progress_bin_centers.to(
+            device=progress_logits.device,
+            dtype=progress_logits.dtype,
+        )
+        return (torch.softmax(progress_logits, dim=-1) * bin_centers).sum(dim=-1)
+
+    def _make_soft_progress_targets(self, progress_target: torch.Tensor) -> torch.Tensor:
+        bin_centers = self.progress_bin_centers.to(
+            device=progress_target.device,
+            dtype=progress_target.dtype,
+        )
+        distances = progress_target.unsqueeze(-1) - bin_centers
+        soft_targets = torch.exp(-0.5 * (distances / self.progress_soft_label_sigma).square())
+        return soft_targets / soft_targets.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+
+    def _progress_loss(
+        self,
+        progress_logits: torch.Tensor,
+        progress_target: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.progress_output_type == "scalar":
+            return F.binary_cross_entropy_with_logits(progress_logits, progress_target)
+        soft_targets = self._make_soft_progress_targets(progress_target)
+        log_probs = F.log_softmax(progress_logits, dim=-1)
+        return -(soft_targets * log_probs).sum(dim=-1).mean()
 
     def forward(
         self,
@@ -543,7 +596,9 @@ class Gr00tN1d7ActionHead(nn.Module):
         if self._uses_vlm_progress_head():
             vlm_progress_hidden = self._compute_vlm_progress_hidden(backbone_output)
         elif self._uses_vlm_dit_progress_head() and progress_backbone_output is None:
-            raise ValueError("progress_backbone_output is required for progress_head_source='vlm_dit'")
+            raise ValueError(
+                "progress_backbone_output is required for progress_head_source='vlm_dit'"
+            )
 
         backbone_output = self.process_backbone_output(backbone_output)
 
@@ -684,7 +739,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                         return_all_hidden_states=True,
                     )
                 progress_logits = self._progress_logits(progress_output[:, progress_index])
-            progress_pred = torch.sigmoid(progress_logits)
+            progress_pred = self._progress_pred_from_logits(progress_logits)
             output["progress_pred"] = progress_pred
             if "progress" in action_input:
                 progress_target = action_input.progress.to(
@@ -692,10 +747,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                     dtype=progress_pred.dtype,
                 ).view_as(progress_pred)
                 progress_target = progress_target.clamp(0.0, 1.0)
-                progress_loss = F.binary_cross_entropy_with_logits(
-                    progress_logits,
-                    progress_target,
-                )
+                progress_loss = self._progress_loss(progress_logits, progress_target)
                 output["progress_loss"] = progress_loss
                 if self.optimize_action_loss:
                     output["loss"] = loss + self.progress_loss_weight * progress_loss
@@ -730,7 +782,9 @@ class Gr00tN1d7ActionHead(nn.Module):
         if self._uses_vlm_progress_head():
             vlm_progress_hidden = self._compute_vlm_progress_hidden(backbone_output)
         elif self._uses_vlm_dit_progress_head() and progress_backbone_output is None:
-            raise ValueError("progress_backbone_output is required for progress_head_source='vlm_dit'")
+            raise ValueError(
+                "progress_backbone_output is required for progress_head_source='vlm_dit'"
+            )
 
         backbone_output = self.process_backbone_output(backbone_output)
 
@@ -917,10 +971,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 model_output[:, action_start:action_end],
                 embodiment_id,
             )
-            if (
-                self.enable_progress_head
-                and not self._uses_non_action_progress_head()
-            ):
+            if self.enable_progress_head and not self._uses_non_action_progress_head():
                 progress_output = model_output
                 if progress_sa_embs is not None:
                     progress_output = self._run_model(
@@ -1110,7 +1161,9 @@ class Gr00tN1d7(PreTrainedModel):
                 batch_size=backbone_inputs.input_ids.shape[0],
                 device=backbone_inputs.input_ids.device,
             )
-            progress_backbone_outputs = self.backbone(backbone_inputs, progress_token=progress_token)
+            progress_backbone_outputs = self.backbone(
+                backbone_inputs, progress_token=progress_token
+            )
         action_outputs = self.action_head(
             backbone_outputs,
             action_inputs,
@@ -1134,7 +1187,9 @@ class Gr00tN1d7(PreTrainedModel):
                 batch_size=backbone_inputs.input_ids.shape[0],
                 device=backbone_inputs.input_ids.device,
             )
-            progress_backbone_outputs = self.backbone(backbone_inputs, progress_token=progress_token)
+            progress_backbone_outputs = self.backbone(
+                backbone_inputs, progress_token=progress_token
+            )
         action_outputs = self.action_head.get_action(
             backbone_outputs,
             action_inputs,

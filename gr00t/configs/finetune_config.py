@@ -94,6 +94,19 @@ class FinetuneConfig:
     robot-state embedding.
     """
 
+    progress_output_type: str = "scalar"
+    """
+    Progress output parameterization. Use "scalar" for one logit with sigmoid,
+    or "soft_bins" for soft-label progress classification whose expected bin
+    center is returned as the continuous progress prediction.
+    """
+
+    progress_num_bins: int = 10
+    """Number of progress bins used when progress_output_type is "soft_bins"."""
+
+    progress_soft_label_sigma: float = 0.08
+    """Gaussian soft-label width for progress_output_type="soft_bins"."""
+
     isolate_progress_action_attention: bool = False
     """
     If True, keep state/action token self-attention equivalent to the original GR00T path

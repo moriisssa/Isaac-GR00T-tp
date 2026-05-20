@@ -128,11 +128,14 @@ class Gr00tN1d7Config(PretrainedConfig):
     # run a progress-only DiT route from state plus a learned token and regress
     # from that token's final feature ("state_multilayer_dit"),
     # or regress from pooled VLM features with optional state features.
-    # Labels are normalized to [0, 1], and the MLP prediction head is
-    # sigmoid-clamped to the same range.
+    # Labels are normalized to [0, 1]. The prediction head can either use one
+    # sigmoid scalar or soft progress bins whose expected bin center is returned.
     enable_progress_head: bool = False
     progress_loss_weight: float = 0.1
     progress_head_source: str = "action"
+    progress_output_type: str = "scalar"
+    progress_num_bins: int = 10
+    progress_soft_label_sigma: float = 0.08
     isolate_progress_action_attention: bool = False
 
     # Multi-embodiment parameters

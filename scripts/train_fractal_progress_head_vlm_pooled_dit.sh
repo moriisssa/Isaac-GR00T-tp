@@ -15,11 +15,14 @@ USE_WANDB="${USE_WANDB:-1}"
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-0}"
 NUM_SHARDS_PER_EPOCH="${NUM_SHARDS_PER_EPOCH:-512}"
 LEARNING_RATE="${LEARNING_RATE:-1e-5}"
-OUTPUT_DIR="${OUTPUT_DIR:-output/fractal_progress_head_vlm_pooled_dit_linear_1k_current}"
+OUTPUT_DIR="${OUTPUT_DIR:-output/fractal_progress_head_vlm_pooled_dit_soft_bins_1k_current}"
 PROGRESS_TARGET="${PROGRESS_TARGET:-current}"
+PROGRESS_OUTPUT_TYPE="${PROGRESS_OUTPUT_TYPE:-soft_bins}"
+PROGRESS_NUM_BINS="${PROGRESS_NUM_BINS:-10}"
+PROGRESS_SOFT_LABEL_SIGMA="${PROGRESS_SOFT_LABEL_SIGMA:-0.08}"
 RESUME="${RESUME:-0}"
 WANDB_PROJECT="${WANDB_PROJECT:-gr00t-progress}"
-EXPERIMENT_NAME="${EXPERIMENT_NAME:-fractal_progress_head_vlm_pooled_dit_linear_1k_current}"
+EXPERIMENT_NAME="${EXPERIMENT_NAME:-fractal_progress_head_vlm_pooled_dit_soft_bins_1k_current}"
 
 BASE_MODEL_PATH="${BASE_MODEL_PATH:-checkpoints/GR00T-N1.7-SimplerEnv-Fractal}"
 DATASET_PATH="${DATASET_PATH:-examples/SimplerEnv/fractal20220817_data_lerobot/}"
@@ -58,4 +61,7 @@ uv run bash examples/finetune.sh \
      --no-tune-vlln \
      --use-ddp \
      --progress-loss-weight 1.0 \
+     --progress-output-type "$PROGRESS_OUTPUT_TYPE" \
+     --progress-num-bins "$PROGRESS_NUM_BINS" \
+     --progress-soft-label-sigma "$PROGRESS_SOFT_LABEL_SIGMA" \
      --progress-target "$PROGRESS_TARGET"
