@@ -20,6 +20,7 @@ PROGRESS_TARGET="${PROGRESS_TARGET:-current}"
 PROGRESS_OUTPUT_TYPE="${PROGRESS_OUTPUT_TYPE:-soft_bins}"
 PROGRESS_NUM_BINS="${PROGRESS_NUM_BINS:-10}"
 PROGRESS_SOFT_LABEL_SIGMA="${PROGRESS_SOFT_LABEL_SIGMA:-0.08}"
+LOAD_BF16="${LOAD_BF16:-0}"
 RESUME="${RESUME:-0}"
 WANDB_PROJECT="${WANDB_PROJECT:-gr00t-progress}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-fractal_progress_head_vlm_pooled_dit_soft_bins_1k_current}"
@@ -32,6 +33,11 @@ if [[ -d "$OUTPUT_DIR" && "$RESUME" != "1" ]]; then
   echo "Output directory already exists: $OUTPUT_DIR" >&2
   echo "Use a new OUTPUT_DIR, or set RESUME=1 to continue from it." >&2
   exit 1
+fi
+
+EXTRA_PROGRESS_ARGS=()
+if [[ "$LOAD_BF16" == "1" ]]; then
+  EXTRA_PROGRESS_ARGS+=(--load-bf16)
 fi
 
 export NUM_GPUS
@@ -64,4 +70,5 @@ uv run bash examples/finetune.sh \
      --progress-output-type "$PROGRESS_OUTPUT_TYPE" \
      --progress-num-bins "$PROGRESS_NUM_BINS" \
      --progress-soft-label-sigma "$PROGRESS_SOFT_LABEL_SIGMA" \
-     --progress-target "$PROGRESS_TARGET"
+     --progress-target "$PROGRESS_TARGET" \
+     "${EXTRA_PROGRESS_ARGS[@]}"

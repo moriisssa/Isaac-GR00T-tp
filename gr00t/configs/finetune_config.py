@@ -127,6 +127,9 @@ class FinetuneConfig:
     of dropping the last action_horizon - 1 observations from each episode.
     """
 
+    load_bf16: bool = False
+    """If True, load frozen backbone weights in bfloat16 to reduce GPU memory use."""
+
     # --- Data Augmentation ---
     random_rotation_angle: int | None = None
     """Maximum rotation angle (in degrees) for random rotation augmentation of input images."""

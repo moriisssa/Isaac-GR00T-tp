@@ -94,7 +94,7 @@ if __name__ == "__main__":
     else:
         config.model.extra_augmentation_config = None
 
-    config.model.load_bf16 = False
+    config.model.load_bf16 = ft_config.load_bf16
     config.model.reproject_vision = False
     config.model.model_name = "nvidia/Cosmos-Reason2-2B"
     config.model.backbone_trainable_params_fp32 = True
