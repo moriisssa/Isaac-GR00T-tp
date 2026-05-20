@@ -20,12 +20,15 @@ from enum import Enum
 from functools import partial
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import time
 from typing import Any
 import uuid
 
 from gr00t.data.embodiment_tags import EmbodimentTag
+from gr00t.eval.progress_curve_plot import write_progress_curve_plot
 from gr00t.eval.sim.env_utils import get_embodiment_tag_from_env_name
 from gr00t.eval.sim.wrapper.multistep_wrapper import MultiStepWrapper
 from gr00t.policy import BasePolicy
@@ -375,68 +378,22 @@ def _write_progress_curve_outputs(
 
     if rows:
         try:
-            import matplotlib
-
-            matplotlib.use("Agg")
-            from matplotlib import pyplot as plt
-
-            plt.figure(figsize=(8, 5))
-            for episode in sorted({row["episode"] for row in metric_rows}):
-                episode_rows = [row for row in metric_rows if row["episode"] == episode]
-                if not episode_rows:
-                    continue
-                xs = [row["target_progress"] for row in episode_rows]
-                ys = [row["progress_pred"] for row in episode_rows]
-                plt.plot(xs, ys, alpha=0.18, linewidth=1.0)
-
-            if metric_rows:
-                bins = np.linspace(0.0, 1.0, 21)
-                target_values = np.asarray(
-                    [row["target_progress"] for row in metric_rows], dtype=np.float32
-                )
-                pred = np.asarray([row["progress_pred"] for row in metric_rows], dtype=np.float32)
-                bin_indices = np.clip(np.digitize(target_values, bins) - 1, 0, len(bins) - 2)
-                bin_centers = (bins[:-1] + bins[1:]) / 2.0
-                mean_pred = [
-                    float(np.mean(pred[bin_indices == idx]))
-                    if np.any(bin_indices == idx)
-                    else np.nan
-                    for idx in range(len(bin_centers))
-                ]
-                plt.plot(
-                    bin_centers,
-                    mean_pred,
-                    marker="o",
-                    linewidth=2.0,
-                    label="binned prediction mean",
-                )
-
-            plt.plot([0.0, 1.0], [0.0, 1.0], "--", linewidth=1.5, label="ideal")
-            plt.xlim(0.0, 1.0)
-            if metric_rows:
-                pred_values = np.asarray(
-                    [row["progress_pred"] for row in metric_rows], dtype=np.float32
-                )
-                y_min = float(min(0.0, np.nanmin(pred_values)))
-                y_max = float(max(1.0, np.nanmax(pred_values)))
-                margin = max(0.05, 0.05 * (y_max - y_min))
-                plt.ylim(y_min - margin, y_max + margin)
-            else:
-                plt.ylim(0.0, 1.0)
-            plt.xlabel("normalized rollout progress")
-            plt.ylabel("predicted progress")
-            plt.title(f"Progress prediction curve ({target})")
-            plt.grid(True, alpha=0.25)
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig(png_path, dpi=160)
-            plt.close()
+            write_progress_curve_plot(metric_rows, png_path=png_path, target=target)
             plot_path = png_path
             plot_backend = "matplotlib"
         except ImportError:
-            _write_progress_curve_svg(metric_rows, svg_path)
-            plot_path = svg_path
-            plot_backend = "svg"
+            if _write_progress_curve_plot_subprocess(
+                csv_path=csv_path,
+                png_path=png_path,
+                success_only=success_only,
+                target=target,
+            ):
+                plot_path = png_path
+                plot_backend = "matplotlib"
+            else:
+                _write_progress_curve_svg(metric_rows, svg_path)
+                plot_path = svg_path
+                plot_backend = "svg"
 
     metrics = {
         "csv_path": str(csv_path),
@@ -458,6 +415,48 @@ def _write_progress_curve_outputs(
     if plot_path is not None:
         print(f"Progress curve plot saved to: {plot_path}")
     return metrics
+
+
+def _write_progress_curve_plot_subprocess(
+    *,
+    csv_path: Path,
+    png_path: Path,
+    success_only: bool,
+    target: str,
+) -> bool:
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "scripts" / "eval" / "plot_progress_curve.py"
+    if not script_path.exists():
+        return False
+
+    python_path = repo_root / ".venv" / "bin" / "python"
+    if python_path.exists():
+        cmd = [str(python_path), str(script_path)]
+    else:
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            return False
+        cmd = [uv_path, "run", "python", str(script_path)]
+
+    cmd.extend(
+        [
+            "--csv-path",
+            str(csv_path),
+            "--png-path",
+            str(png_path),
+            "--target",
+            target,
+        ]
+    )
+    if success_only:
+        cmd.append("--success-only")
+
+    result = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        return False
+    return png_path.exists()
 
 
 def _write_progress_curve_svg(rows: list[dict[str, Any]], svg_path: Path) -> None:
