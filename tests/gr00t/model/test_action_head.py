@@ -191,6 +191,29 @@ class TestActionHeadForward:
         assert torch.isfinite(out["loss"])
         assert head.progress_head[1].out_features == config.progress_num_bins
 
+    def test_forward_with_hard_bin_progress_head(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="vlm_pooled_dit",
+            progress_output_type="hard_bins",
+            progress_num_bins=10,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        assert "progress_pred" in out
+        assert "progress_class_pred" in out
+        assert "progress_class_target" in out
+        assert "progress_loss" in out
+        assert out["progress_pred"].shape == (2,)
+        assert out["progress_class_pred"].shape == (2,)
+        assert torch.equal(out["progress_class_pred"], torch.zeros(2, dtype=torch.long))
+        assert torch.equal(out["progress_class_target"], torch.tensor([0, 9]))
+        assert torch.allclose(out["progress_pred"], torch.full_like(out["progress_pred"], 0.05))
+        assert torch.isfinite(out["loss"])
+        assert head.progress_head[1].out_features == config.progress_num_bins
+
     def test_soft_progress_targets_are_normalized(self):
         config = _small_config(
             enable_progress_head=True,

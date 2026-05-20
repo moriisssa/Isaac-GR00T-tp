@@ -129,7 +129,8 @@ class Gr00tN1d7Config(PretrainedConfig):
     # from that token's final feature ("state_multilayer_dit"),
     # or regress from pooled VLM features with optional state features.
     # Labels are normalized to [0, 1]. The prediction head can either use one
-    # sigmoid scalar or soft progress bins whose expected bin center is returned.
+    # sigmoid scalar, soft progress bins whose expected bin center is returned,
+    # or hard progress bins trained with cross-entropy.
     enable_progress_head: bool = False
     progress_loss_weight: float = 0.1
     progress_head_source: str = "action"

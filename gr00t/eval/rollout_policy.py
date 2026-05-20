@@ -114,6 +114,7 @@ class ProgressCurveConfig:
     success_only: bool = False
     target: str = "current"
     target_offset_steps: int = 0
+    num_bins: int = 10
 
 
 def get_simpler_env_fn(
@@ -250,6 +251,27 @@ def _extract_progress_predictions(policy_info: dict[str, Any], n_envs: int) -> l
     return predictions
 
 
+def _extract_progress_classes(policy_info: dict[str, Any], n_envs: int) -> list[int | None]:
+    if "progress_class" not in policy_info:
+        return [None] * n_envs
+
+    progress_class = np.asarray(policy_info["progress_class"], dtype=np.int64).reshape(-1)
+    if progress_class.size == 1 and n_envs > 1:
+        progress_class = np.repeat(progress_class, n_envs)
+
+    predictions: list[int | None] = []
+    for env_idx in range(n_envs):
+        if env_idx >= progress_class.size:
+            predictions.append(None)
+        else:
+            predictions.append(int(progress_class[env_idx]))
+    return predictions
+
+
+def _progress_to_class(progress: float, num_bins: int) -> int:
+    return int(np.clip(np.floor(progress * num_bins), 0, num_bins - 1))
+
+
 def _finalize_progress_episode(
     episode_rows: list[dict[str, Any]],
     *,
@@ -259,6 +281,7 @@ def _finalize_progress_episode(
     target: str,
     target_offset_steps: int,
     final_primitive_step: int,
+    num_bins: int,
 ) -> list[dict[str, Any]]:
     episode_length = len(episode_rows)
     denominator = max(final_primitive_step, 1)
@@ -273,6 +296,10 @@ def _finalize_progress_episode(
             raise ValueError(f"Unsupported progress curve target: {target}")
         target_progress = float(target_step / denominator)
         progress_pred = row["progress_pred"]
+        progress_class_pred = row.get("progress_class_pred")
+        if progress_class_pred is None:
+            progress_class_pred = _progress_to_class(progress_pred, num_bins)
+        target_class = _progress_to_class(target_progress, num_bins)
         finalized_rows.append(
             {
                 "episode": episode_index,
@@ -283,6 +310,9 @@ def _finalize_progress_episode(
                 "final_primitive_step": final_primitive_step,
                 "target_progress": target_progress,
                 "progress_pred": progress_pred,
+                "progress_class_pred": progress_class_pred,
+                "target_class": target_class,
+                "class_correct": progress_class_pred == target_class,
                 "abs_error": abs(progress_pred - target_progress),
                 "success": success,
                 "valid": valid,
@@ -306,6 +336,9 @@ def _summarize_progress_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     pred = np.asarray([row["progress_pred"] for row in rows], dtype=np.float32)
     target = np.asarray([row["target_progress"] for row in rows], dtype=np.float32)
     errors = pred - target
+    pred_class = np.asarray([row.get("progress_class_pred", -1) for row in rows], dtype=np.int64)
+    target_class = np.asarray([row.get("target_class", -2) for row in rows], dtype=np.int64)
+    valid_classes = (pred_class >= 0) & (target_class >= 0)
 
     negative_deltas = 0
     total_deltas = 0
@@ -332,6 +365,11 @@ def _summarize_progress_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "target_min": float(np.min(target)),
         "target_max": float(np.max(target)),
         "corr": float(np.corrcoef(target, pred)[0, 1]) if len(pred) > 1 else None,
+        "accuracy": (
+            float(np.mean(pred_class[valid_classes] == target_class[valid_classes]))
+            if np.any(valid_classes)
+            else None
+        ),
         "negative_delta_fraction": (
             float(negative_deltas / total_deltas) if total_deltas > 0 else None
         ),
@@ -362,6 +400,9 @@ def _write_progress_curve_outputs(
         "final_primitive_step",
         "target_progress",
         "progress_pred",
+        "progress_class_pred",
+        "target_class",
+        "class_correct",
         "abs_error",
         "success",
         "valid",
@@ -594,6 +635,7 @@ def run_rollout_gymnasium_policy(
     while completed_episodes < n_episodes:
         actions, policy_info = policy.get_action(observations)
         progress_preds = _extract_progress_predictions(policy_info, n_envs)
+        progress_classes = _extract_progress_classes(policy_info, n_envs)
         if progress_curve_config and progress_curve_config.output_dir:
             for env_idx, progress_pred in enumerate(progress_preds):
                 if progress_pred is None:
@@ -605,6 +647,7 @@ def run_rollout_gymnasium_policy(
                         "primitive_step": current_lengths[env_idx]
                         * wrapper_configs.multistep.n_action_steps,
                         "progress_pred": progress_pred,
+                        "progress_class_pred": progress_classes[env_idx],
                     }
                 )
         next_obs, rewards, terminations, truncations, env_infos = env.step(actions)
@@ -675,6 +718,7 @@ def run_rollout_gymnasium_policy(
                                 - 1,
                                 1,
                             ),
+                            num_bins=progress_curve_config.num_bins,
                         )
                     )
                     current_progress_rows[env_idx] = []
@@ -772,6 +816,7 @@ def run_gr00t_sim_policy(
     progress_curve_dir: str | None = None,
     progress_curve_success_only: bool = False,
     progress_curve_target: str = "current",
+    progress_curve_num_bins: int = 10,
     record_video: bool = True,
 ):
     if progress_curve_target not in {"current", "chunk_end"}:
@@ -832,6 +877,7 @@ def run_gr00t_sim_policy(
             success_only=progress_curve_success_only,
             target=progress_curve_target,
             target_offset_steps=progress_target_offset_steps,
+            num_bins=progress_curve_num_bins,
         ),
     )
     print("Video saved to: ", wrapper_configs.video.video_dir)
@@ -884,6 +930,9 @@ class RolloutConfig:
     progress_curve_target: str = "current"
     """Progress target used for the curve: 'current' or 'chunk_end'."""
 
+    progress_curve_num_bins: int = 10
+    """Number of bins used for progress classification metrics."""
+
     record_video: bool = True
     """Whether to record rollout videos."""
 
@@ -916,6 +965,7 @@ if __name__ == "__main__":
         progress_curve_dir=args.progress_curve_dir,
         progress_curve_success_only=args.progress_curve_success_only,
         progress_curve_target=args.progress_curve_target,
+        progress_curve_num_bins=args.progress_curve_num_bins,
         record_video=args.record_video,
     )
     print("results: ", results)

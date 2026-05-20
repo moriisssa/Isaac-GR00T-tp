@@ -84,10 +84,10 @@ class Gr00tN1d7ActionHead(nn.Module):
         self.progress_loss_weight = config.progress_loss_weight
         self.progress_head_source = getattr(config, "progress_head_source", "action").lower()
         self.progress_output_type = getattr(config, "progress_output_type", "scalar").lower()
-        if self.progress_output_type not in {"scalar", "soft_bins"}:
+        if self.progress_output_type not in {"scalar", "soft_bins", "hard_bins"}:
             raise ValueError(
                 f"Unsupported progress_output_type={self.progress_output_type!r}; "
-                "expected 'scalar' or 'soft_bins'."
+                "expected 'scalar', 'soft_bins', or 'hard_bins'."
             )
         self.progress_num_bins = int(getattr(config, "progress_num_bins", 10))
         if self.progress_num_bins < 2:
@@ -114,9 +114,11 @@ class Gr00tN1d7ActionHead(nn.Module):
         )
         if self.enable_progress_head:
             progress_output_dim = (
-                self.progress_num_bins if self.progress_output_type == "soft_bins" else 1
+                self.progress_num_bins
+                if self.progress_output_type in {"soft_bins", "hard_bins"}
+                else 1
             )
-            if self.progress_output_type == "soft_bins":
+            if self.progress_output_type in {"soft_bins", "hard_bins"}:
                 self.register_buffer(
                     "progress_bin_centers",
                     (torch.arange(self.progress_num_bins, dtype=torch.float32) + 0.5)
@@ -544,7 +546,23 @@ class Gr00tN1d7ActionHead(nn.Module):
             device=progress_logits.device,
             dtype=progress_logits.dtype,
         )
+        if self.progress_output_type == "hard_bins":
+            return bin_centers[self._progress_class_from_logits(progress_logits)]
         return (torch.softmax(progress_logits, dim=-1) * bin_centers).sum(dim=-1)
+
+    def _progress_class_from_logits(self, progress_logits: torch.Tensor) -> torch.Tensor:
+        if self.progress_output_type == "scalar":
+            progress_pred = torch.sigmoid(progress_logits)
+            return self._progress_target_classes(progress_pred)
+        return progress_logits.argmax(dim=-1)
+
+    def _progress_target_classes(self, progress_target: torch.Tensor) -> torch.Tensor:
+        target = progress_target.clamp(0.0, 1.0)
+        return torch.clamp(
+            (target * self.progress_num_bins).long(),
+            min=0,
+            max=self.progress_num_bins - 1,
+        )
 
     def _make_soft_progress_targets(self, progress_target: torch.Tensor) -> torch.Tensor:
         bin_centers = self.progress_bin_centers.to(
@@ -562,6 +580,8 @@ class Gr00tN1d7ActionHead(nn.Module):
     ) -> torch.Tensor:
         if self.progress_output_type == "scalar":
             return F.binary_cross_entropy_with_logits(progress_logits, progress_target)
+        if self.progress_output_type == "hard_bins":
+            return F.cross_entropy(progress_logits, self._progress_target_classes(progress_target))
         soft_targets = self._make_soft_progress_targets(progress_target)
         log_probs = F.log_softmax(progress_logits, dim=-1)
         return -(soft_targets * log_probs).sum(dim=-1).mean()
@@ -741,6 +761,8 @@ class Gr00tN1d7ActionHead(nn.Module):
                 progress_logits = self._progress_logits(progress_output[:, progress_index])
             progress_pred = self._progress_pred_from_logits(progress_logits)
             output["progress_pred"] = progress_pred
+            if self.progress_output_type in {"soft_bins", "hard_bins"}:
+                output["progress_class_pred"] = self._progress_class_from_logits(progress_logits)
             if "progress" in action_input:
                 progress_target = action_input.progress.to(
                     device=progress_pred.device,
@@ -749,6 +771,8 @@ class Gr00tN1d7ActionHead(nn.Module):
                 progress_target = progress_target.clamp(0.0, 1.0)
                 progress_loss = self._progress_loss(progress_logits, progress_target)
                 output["progress_loss"] = progress_loss
+                if self.progress_output_type in {"soft_bins", "hard_bins"}:
+                    output["progress_class_target"] = self._progress_target_classes(progress_target)
                 if self.optimize_action_loss:
                     output["loss"] = loss + self.progress_loss_weight * progress_loss
                 else:
@@ -860,6 +884,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         dt = 1.0 / self.num_inference_timesteps
         vel_strength = torch.ones_like(actions)
         progress_pred = None
+        progress_class_pred = None
         if (
             self._uses_vlm_progress_head()
             or self._uses_vlm_pooled_progress_head()
@@ -867,14 +892,20 @@ class Gr00tN1d7ActionHead(nn.Module):
             or self._uses_state_multilayer_dit_progress_head()
         ):
             assert progress_hidden is not None
-            progress_pred = self._predict_progress(progress_hidden)
+            progress_logits = self._progress_logits(progress_hidden)
+            progress_pred = self._progress_pred_from_logits(progress_logits)
+            if self.progress_output_type in {"soft_bins", "hard_bins"}:
+                progress_class_pred = self._progress_class_from_logits(progress_logits)
         elif self._uses_vlm_dit_progress_head():
             assert progress_backbone_output is not None
             progress_hidden = self._compute_vlm_dit_progress_hidden(
                 state_features=state_features,
                 progress_backbone_output=progress_backbone_output,
             )
-            progress_pred = self._predict_progress(progress_hidden)
+            progress_logits = self._progress_logits(progress_hidden)
+            progress_pred = self._progress_pred_from_logits(progress_logits)
+            if self.progress_output_type in {"soft_bins", "hard_bins"}:
+                progress_class_pred = self._progress_class_from_logits(progress_logits)
 
         if "action" in action_input:
             # If action in input when doing get action, it means we want to use RTC.
@@ -980,7 +1011,10 @@ class Gr00tN1d7ActionHead(nn.Module):
                         timestep=timesteps_tensor,
                         backbone_output=backbone_output,
                     )
-                progress_pred = self._predict_progress(progress_output[:, progress_index])
+                progress_logits = self._progress_logits(progress_output[:, progress_index])
+                progress_pred = self._progress_pred_from_logits(progress_logits)
+                if self.progress_output_type in {"soft_bins", "hard_bins"}:
+                    progress_class_pred = self._progress_class_from_logits(progress_logits)
 
             # Update actions using euler integration.
             actions = actions + dt * pred_velocity * vel_strength
@@ -992,6 +1026,8 @@ class Gr00tN1d7ActionHead(nn.Module):
         }
         if self.enable_progress_head:
             output["progress_pred"] = progress_pred
+            if progress_class_pred is not None:
+                output["progress_class_pred"] = progress_class_pred
         return BatchFeature(data=output)
 
     @torch.no_grad()

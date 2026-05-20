@@ -98,11 +98,12 @@ class FinetuneConfig:
     """
     Progress output parameterization. Use "scalar" for one logit with sigmoid,
     or "soft_bins" for soft-label progress classification whose expected bin
-    center is returned as the continuous progress prediction.
+    center is returned as the continuous progress prediction, or "hard_bins"
+    for hard progress-bin classification with cross-entropy loss.
     """
 
     progress_num_bins: int = 10
-    """Number of progress bins used when progress_output_type is "soft_bins"."""
+    """Number of progress bins used when progress_output_type is "soft_bins" or "hard_bins"."""
 
     progress_soft_label_sigma: float = 0.08
     """Gaussian soft-label width for progress_output_type="soft_bins"."""

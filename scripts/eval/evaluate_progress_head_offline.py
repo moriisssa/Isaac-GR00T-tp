@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from copy import deepcopy
-from dataclasses import dataclass, field
 import csv
+from dataclasses import dataclass, field
 import json
 import logging
 from pathlib import Path
@@ -46,6 +46,9 @@ class OfflineProgressEvalConfig:
 
     progress_target: ProgressTarget = "chunk_end"
     """Target definition used during progress-head training."""
+
+    progress_num_bins: int = 10
+    """Number of bins used for progress classification metrics."""
 
     device: str | None = None
     """Torch device. Defaults to cuda if available, else cpu."""
@@ -90,7 +93,7 @@ def _summarize(
     pred = pred[finite]
     target = target[finite]
     error = error[finite]
-    return {
+    summary = {
         "count": len(rows),
         "valid_count": int(finite.sum()),
         "mae": float(np.mean(np.abs(error))),
@@ -104,6 +107,31 @@ def _summarize(
         "target_max": float(np.max(target)),
         "corr": float(np.corrcoef(target, pred)[0, 1]) if len(pred) > 1 else float("nan"),
     }
+    target_class_key = {
+        "target_progress": "target_class",
+        "current_progress": "current_class",
+        "chunk_end_progress": "chunk_end_class",
+    }.get(target_key)
+    if target_class_key and rows and "progress_class_pred" in rows[0]:
+        pred_class = np.asarray([row["progress_class_pred"] for row in rows], dtype=np.int64)
+        target_class = np.asarray([row[target_class_key] for row in rows], dtype=np.int64)
+        finite_class = np.isfinite(pred_class) & np.isfinite(target_class)
+        if finite_class.any():
+            summary.update(
+                {
+                    "class_count": int(finite_class.sum()),
+                    "accuracy": float(
+                        np.mean(pred_class[finite_class] == target_class[finite_class])
+                    ),
+                    "pred_class_mean": float(np.mean(pred_class[finite_class])),
+                    "target_class_mean": float(np.mean(target_class[finite_class])),
+                }
+            )
+    return summary
+
+
+def _progress_to_class(progress: float, num_bins: int) -> int:
+    return int(np.clip(np.floor(progress * num_bins), 0, num_bins - 1))
 
 
 def _compute_binned_curve(
@@ -270,6 +298,11 @@ def _write_outputs(
         "current_progress",
         "chunk_end_progress",
         "progress_pred",
+        "progress_class_pred",
+        "target_class",
+        "current_class",
+        "chunk_end_class",
+        "class_correct",
         "abs_error",
         "abs_error_current",
         "abs_error_chunk_end",
@@ -420,6 +453,10 @@ def main(config: OfflineProgressEvalConfig) -> None:
                 raise RuntimeError("Checkpoint did not return progress predictions")
 
             pred = float(np.asarray(info["progress"], dtype=np.float32).reshape(-1)[0])
+            if "progress_class" in info:
+                pred_class = int(np.asarray(info["progress_class"], dtype=np.int64).reshape(-1)[0])
+            else:
+                pred_class = _progress_to_class(pred, config.progress_num_bins)
             current_progress = float(
                 compute_progress_label(
                     episode,
@@ -439,6 +476,9 @@ def main(config: OfflineProgressEvalConfig) -> None:
             target = (
                 chunk_end_progress if config.progress_target == "chunk_end" else current_progress
             )
+            target_class = _progress_to_class(target, config.progress_num_bins)
+            current_class = _progress_to_class(current_progress, config.progress_num_bins)
+            chunk_end_class = _progress_to_class(chunk_end_progress, config.progress_num_bins)
             rows.append(
                 {
                     "traj_id": traj_id,
@@ -448,6 +488,11 @@ def main(config: OfflineProgressEvalConfig) -> None:
                     "current_progress": current_progress,
                     "chunk_end_progress": chunk_end_progress,
                     "progress_pred": pred,
+                    "progress_class_pred": pred_class,
+                    "target_class": target_class,
+                    "current_class": current_class,
+                    "chunk_end_class": chunk_end_class,
+                    "class_correct": pred_class == target_class,
                     "abs_error": abs(pred - target),
                     "abs_error_current": abs(pred - current_progress),
                     "abs_error_chunk_end": abs(pred - chunk_end_progress),

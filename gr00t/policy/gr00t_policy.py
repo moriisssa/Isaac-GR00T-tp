@@ -410,6 +410,8 @@ class Gr00tPolicy(BasePolicy):
         info = {}
         if "progress_pred" in model_pred:
             info["progress"] = model_pred["progress_pred"].float().cpu().numpy()
+        if "progress_class_pred" in model_pred:
+            info["progress_class"] = model_pred["progress_class_pred"].long().cpu().numpy()
 
         # Step 5: Decode actions from normalized space back to physical units
         batched_states = {}

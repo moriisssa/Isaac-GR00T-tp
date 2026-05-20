@@ -431,6 +431,22 @@ class Gr00tTrainer(Trainer):
                             .item(),
                         }
                     )
+                    if "progress_class_pred" in outputs and "progress_class_target" in outputs:
+                        progress_class_pred = outputs["progress_class_pred"].detach()
+                        progress_class_target = (
+                            outputs["progress_class_target"]
+                            .detach()
+                            .to(
+                                device=progress_class_pred.device,
+                                dtype=progress_class_pred.dtype,
+                            )
+                        )
+                        progress_accuracy = (
+                            progress_class_pred.eq(progress_class_target).float().mean()
+                        )
+                        progress_logs["train_progress_accuracy"] = (
+                            self._nested_gather(progress_accuracy).mean().item()
+                        )
             if self.args.local_rank in (-1, 0):
                 self.log(progress_logs)
 
