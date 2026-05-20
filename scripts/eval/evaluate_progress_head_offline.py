@@ -47,6 +47,9 @@ class OfflineProgressEvalConfig:
     progress_target: ProgressTarget = "chunk_end"
     """Target definition used during progress-head training."""
 
+    tail_shrink_action_chunk: bool = False
+    """If True, evaluate tail observations with shortened action chunks."""
+
     progress_num_bins: int = 10
     """Number of bins used for progress classification metrics."""
 
@@ -72,9 +75,16 @@ def _build_policy_observation(
 
 
 def _sample_step_indices(
-    episode_length: int, action_horizon: int, samples_per_traj: int
+    episode_length: int,
+    action_horizon: int,
+    samples_per_traj: int,
+    tail_shrink_action_chunk: bool = False,
 ) -> list[int]:
-    effective_length = max(1, episode_length - action_horizon + 1)
+    effective_length = (
+        max(1, episode_length)
+        if tail_shrink_action_chunk
+        else max(1, episode_length - action_horizon + 1)
+    )
     if samples_per_traj >= effective_length:
         return list(range(effective_length))
     return np.linspace(0, effective_length - 1, samples_per_traj, dtype=int).tolist()
@@ -435,7 +445,12 @@ def main(config: OfflineProgressEvalConfig) -> None:
             continue
 
         episode = loader[traj_id]
-        step_indices = _sample_step_indices(len(episode), action_horizon, config.samples_per_traj)
+        step_indices = _sample_step_indices(
+            len(episode),
+            action_horizon,
+            config.samples_per_traj,
+            tail_shrink_action_chunk=config.tail_shrink_action_chunk,
+        )
         logging.info("Evaluating traj_id=%s with steps=%s", traj_id, step_indices)
 
         for step_index in step_indices:
@@ -446,6 +461,7 @@ def main(config: OfflineProgressEvalConfig) -> None:
                 embodiment_tag,
                 allow_padding=False,
                 progress_target=config.progress_target,
+                tail_shrink_action_chunk=config.tail_shrink_action_chunk,
             )
             observation = _build_policy_observation(data_point, modality_configs)
             _action, info = policy.get_action(observation)
