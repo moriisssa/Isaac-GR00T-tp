@@ -209,7 +209,7 @@ class TestActionHeadForward:
         assert torch.isfinite(out["loss"])
         assert not hasattr(head, "progress_token")
         assert hasattr(head, "progress_vlm_projector")
-        assert len(head.progress_head) == 2
+        assert len(head.progress_head) == 4
         assert head.progress_head[0].normalized_shape == (config.hidden_size,)
 
     def test_forward_with_soft_bin_progress_head(self):
@@ -229,7 +229,7 @@ class TestActionHeadForward:
         assert out["progress_pred"].shape == (2,)
         assert torch.allclose(out["progress_pred"], torch.full_like(out["progress_pred"], 0.5))
         assert torch.isfinite(out["loss"])
-        assert head.progress_head[1].out_features == config.progress_num_bins
+        assert head.progress_head[3].out_features == config.progress_num_bins
 
     def test_forward_with_hard_bin_progress_head(self):
         config = _small_config(
@@ -252,7 +252,7 @@ class TestActionHeadForward:
         assert torch.equal(out["progress_class_target"], torch.tensor([0, 9]))
         assert torch.allclose(out["progress_pred"], torch.full_like(out["progress_pred"], 0.05))
         assert torch.isfinite(out["loss"])
-        assert head.progress_head[1].out_features == config.progress_num_bins
+        assert head.progress_head[3].out_features == config.progress_num_bins
 
     def test_soft_progress_targets_are_normalized(self):
         config = _small_config(

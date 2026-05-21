@@ -174,7 +174,6 @@ class Gr00tN1d7ActionHead(nn.Module):
                 nn.init.xavier_uniform_(self.progress_vlm_token_projector.weight)
                 nn.init.zeros_(self.progress_vlm_token_projector.bias)
             if self.progress_head_source in {
-                "vlm_pooled_dit",
                 "state_multilayer_dit",
                 "vlm_concat_linear",
                 "vlm_concat_projected_linear",
