@@ -135,6 +135,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 "action",
                 "vlm",
                 "vlm_dit",
+                "vlm_pooled_dit",
                 "state_multilayer_dit",
             }
             progress_token_dim = (
@@ -158,7 +159,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 self.progress_token = nn.Parameter(torch.empty(1, 1, progress_token_dim))
                 nn.init.normal_(self.progress_token, mean=0.0, std=1.0)
                 self.progress_token_scale = 0.02
-            if self.progress_head_source in {"vlm_dit", "vlm_pooled_dit"}:
+            if self.progress_head_source == "vlm_dit":
                 self.progress_vlm_projector = nn.Linear(
                     config.backbone_embedding_dim,
                     self.input_embedding_dim,
@@ -404,13 +405,17 @@ class Gr00tN1d7ActionHead(nn.Module):
         state_features: torch.Tensor,
         backbone_output: BatchFeature,
     ) -> torch.Tensor:
-        pooled_features = self._pool_vlm_features(backbone_output)
-        progress_query = self.progress_vlm_projector(pooled_features).unsqueeze(1)
-        progress_sa_embs = torch.cat((state_features, progress_query), dim=1)
+        progress_features = self._make_progress_features(
+            batch_size=state_features.shape[0],
+            position_index=state_features.shape[1],
+            device=state_features.device,
+            dtype=state_features.dtype,
+        )
+        progress_sa_embs = torch.cat((state_features, progress_features), dim=1)
         progress_timestep = torch.zeros(
-            pooled_features.shape[0],
+            state_features.shape[0],
             dtype=torch.long,
-            device=pooled_features.device,
+            device=state_features.device,
         )
         progress_output = self._run_model(
             hidden_states=progress_sa_embs,

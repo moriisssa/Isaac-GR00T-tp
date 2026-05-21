@@ -207,8 +207,8 @@ class TestActionHeadForward:
         assert "progress_loss" in out
         assert out["progress_pred"].shape == (2,)
         assert torch.isfinite(out["loss"])
-        assert not hasattr(head, "progress_token")
-        assert hasattr(head, "progress_vlm_projector")
+        assert hasattr(head, "progress_token")
+        assert not hasattr(head, "progress_vlm_projector")
         assert len(head.progress_head) == 4
         assert head.progress_head[0].normalized_shape == (config.hidden_size,)
 
@@ -792,7 +792,7 @@ class TestActionHeadTrainableParams:
 
         assert trainable
         assert all(
-            name.startswith("progress_head") or name.startswith("progress_vlm_projector")
+            name.startswith("progress_token") or name.startswith("progress_head")
             for name in trainable
         )
 
