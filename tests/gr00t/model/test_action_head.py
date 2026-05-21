@@ -137,7 +137,7 @@ class TestActionHeadForward:
         assert out["progress_pred"].shape == (2,)
         assert torch.isfinite(out["loss"])
 
-    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state", "vlm_concat_linear"])
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
     def test_forward_with_vlm_pooled_progress_head(self, source):
         config = _small_config(enable_progress_head=True, progress_head_source=source)
         head = Gr00tN1d7ActionHead(config)
@@ -152,24 +152,7 @@ class TestActionHeadForward:
         expected_dim = config.backbone_embedding_dim
         if source == "vlm_pooled_state":
             expected_dim += config.input_embedding_dim
-        elif source == "vlm_concat_linear":
-            expected_dim *= config.max_seq_len
-            assert len(head.progress_head) == 2
         assert head.progress_head[0].normalized_shape == (expected_dim,)
-
-    def test_vlm_concat_linear_progress_head_masks_and_pads_tokens(self):
-        config = _small_config(enable_progress_head=True, progress_head_source="vlm_concat_linear")
-        head = Gr00tN1d7ActionHead(config)
-        backbone_output = _make_backbone_output(config, batch_size=1, seq_len=4)
-        backbone_output.backbone_features = torch.ones_like(backbone_output.backbone_features)
-        backbone_output.backbone_attention_mask[:, 2:] = 0
-
-        hidden = head._concat_vlm_features(backbone_output)
-
-        expected = torch.zeros(1, config.max_seq_len, config.backbone_embedding_dim)
-        expected[:, :2] = 1
-        assert hidden.shape == (1, config.max_seq_len * config.backbone_embedding_dim)
-        assert torch.equal(hidden, expected.reshape(1, -1))
 
     def test_forward_with_vlm_pooled_dit_progress_head(self):
         config = _small_config(
@@ -572,7 +555,7 @@ class TestActionHeadForward:
         assert head.model.encoder_hidden_states[0].shape[1] == 8
         assert head.model.encoder_hidden_states[1].shape[1] == 8
 
-    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state", "vlm_concat_linear"])
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
     def test_vlm_pooled_progress_head_does_not_add_action_token(self, source):
         class CaptureModel(torch.nn.Module):
             def __init__(self):
@@ -728,7 +711,7 @@ class TestActionHeadTrainableParams:
             for name in trainable
         )
 
-    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state", "vlm_concat_linear"])
+    @pytest.mark.parametrize("source", ["vlm_pooled", "vlm_pooled_state"])
     def test_vlm_pooled_progress_only_leaves_only_progress_head_trainable(self, source):
         config = _small_config(
             enable_progress_head=True,
