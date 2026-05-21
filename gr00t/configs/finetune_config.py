@@ -91,7 +91,8 @@ class FinetuneConfig:
     plus a learned token and regress from its final token feature,
     "vlm_pooled" to regress from pooled System2 features, or
     "vlm_pooled_state" to concatenate pooled System2 features with the frozen
-    robot-state embedding.
+    robot-state embedding, or "vlm_concat_linear" to flatten masked System2
+    tokens and train a single linear progress head.
     """
 
     progress_output_type: str = "scalar"

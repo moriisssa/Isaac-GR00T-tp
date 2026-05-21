@@ -234,7 +234,13 @@ class TestGr00tN1d7Forward:
 
     @pytest.mark.parametrize(
         "source",
-        ["vlm_pooled", "vlm_pooled_state", "vlm_pooled_dit", "state_multilayer_dit"],
+        [
+            "vlm_pooled",
+            "vlm_pooled_state",
+            "vlm_concat_linear",
+            "vlm_pooled_dit",
+            "state_multilayer_dit",
+        ],
     )
     def test_forward_with_vlm_pooled_progress_head(self, source):
         config = _make_small_config(
@@ -308,7 +314,13 @@ class TestGr00tN1d7GetAction:
 
     @pytest.mark.parametrize(
         "source",
-        ["vlm_pooled", "vlm_pooled_state", "vlm_pooled_dit", "state_multilayer_dit"],
+        [
+            "vlm_pooled",
+            "vlm_pooled_state",
+            "vlm_concat_linear",
+            "vlm_pooled_dit",
+            "state_multilayer_dit",
+        ],
     )
     def test_get_action_with_vlm_pooled_progress_head(self, source):
         config = _make_small_config(enable_progress_head=True, progress_head_source=source)
