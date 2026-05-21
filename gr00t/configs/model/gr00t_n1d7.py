@@ -127,8 +127,9 @@ class Gr00tN1d7Config(PretrainedConfig):
     # the final query-token feature ("vlm_pooled_dit"),
     # run a progress-only DiT route from state plus a learned token and regress
     # from that token's final feature ("state_multilayer_dit"),
-    # regress from pooled VLM features with optional state features, or flatten
-    # masked VLM tokens into a single linear probe ("vlm_concat_linear").
+    # regress from pooled VLM features with optional state features, flatten
+    # masked VLM tokens into a single linear probe ("vlm_concat_linear"), or
+    # project each VLM token before flattening ("vlm_concat_projected_linear").
     # Labels are normalized to [0, 1]. The prediction head can either use one
     # sigmoid scalar, soft progress bins whose expected bin center is returned,
     # or hard progress bins trained with cross-entropy.
@@ -138,6 +139,7 @@ class Gr00tN1d7Config(PretrainedConfig):
     progress_output_type: str = "scalar"
     progress_num_bins: int = 10
     progress_soft_label_sigma: float = 0.08
+    progress_concat_project_dim: int = 64
     isolate_progress_action_attention: bool = False
 
     # Multi-embodiment parameters
