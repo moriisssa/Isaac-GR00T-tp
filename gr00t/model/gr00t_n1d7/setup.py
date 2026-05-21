@@ -123,6 +123,8 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                         "action_head.progress_token",
                         "action_head.progress_head",
                         "action_head.progress_vlm_projector",
+                        "action_head.progress_vlm_token_norm",
+                        "action_head.progress_vlm_token_projector",
                     ]
                 )
             other_missing = [
@@ -136,6 +138,8 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 if k.startswith("action_head.progress_token")
                 or k.startswith("action_head.progress_head")
                 or k.startswith("action_head.progress_vlm_projector")
+                or k.startswith("action_head.progress_vlm_token_norm")
+                or k.startswith("action_head.progress_vlm_token_projector")
             ]
             if progress_missing:
                 logging.info(
@@ -149,6 +153,8 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                         "action_head.progress_token",
                         "action_head.progress_head",
                         "action_head.progress_vlm_projector",
+                        "action_head.progress_vlm_token_norm",
+                        "action_head.progress_vlm_token_projector",
                     ]
                 )
             progress_unexpected = [
