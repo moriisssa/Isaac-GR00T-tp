@@ -91,6 +91,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 tune_progress_head=self.config.model.tune_progress_head,
                 progress_loss_weight=self.config.model.progress_loss_weight,
                 progress_head_source=self.config.model.progress_head_source,
+                progress_vlm_layer=self.config.model.progress_vlm_layer,
                 progress_output_type=self.config.model.progress_output_type,
                 progress_num_bins=self.config.model.progress_num_bins,
                 progress_soft_label_sigma=self.config.model.progress_soft_label_sigma,

@@ -64,14 +64,18 @@ def action_head():
     return head, config
 
 
-def _make_backbone_output(config, batch_size=2, seq_len=8):
-    return BatchFeature(
-        data={
-            "backbone_features": torch.randn(batch_size, seq_len, config.backbone_embedding_dim),
-            "backbone_attention_mask": torch.ones(batch_size, seq_len, dtype=torch.long),
-            "image_mask": torch.ones(batch_size, seq_len, dtype=torch.bool),
-        }
-    )
+def _make_backbone_output(config, batch_size=2, seq_len=8, num_hidden_states=0):
+    data = {
+        "backbone_features": torch.randn(batch_size, seq_len, config.backbone_embedding_dim),
+        "backbone_attention_mask": torch.ones(batch_size, seq_len, dtype=torch.long),
+        "image_mask": torch.ones(batch_size, seq_len, dtype=torch.bool),
+    }
+    if num_hidden_states:
+        data["backbone_hidden_states"] = tuple(
+            torch.randn(batch_size, seq_len, config.backbone_embedding_dim)
+            for _ in range(num_hidden_states)
+        )
+    return BatchFeature(data=data)
 
 
 def _make_progress_backbone_output(config, batch_size=2, seq_len=9):
@@ -139,13 +143,26 @@ class TestActionHeadForward:
 
     @pytest.mark.parametrize(
         "source",
-        ["vlm_pooled", "vlm_pooled_state", "vlm_concat_linear", "vlm_concat_projected_linear"],
+        [
+            "vlm_pooled",
+            "vlm_pooled_state",
+            "vlm_concat_linear",
+            "vlm_concat_projected_linear",
+            "vlm_layer_pooled",
+        ],
     )
     def test_forward_with_vlm_pooled_progress_head(self, source):
-        config = _small_config(enable_progress_head=True, progress_head_source=source)
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source=source,
+            progress_vlm_layer=1,
+        )
         head = Gr00tN1d7ActionHead(config)
         head.train()
-        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+        out = head.forward(
+            _make_backbone_output(config, num_hidden_states=2),
+            _make_action_input(config),
+        )
 
         assert "progress_pred" in out
         assert "progress_loss" in out
@@ -597,7 +614,13 @@ class TestActionHeadForward:
 
     @pytest.mark.parametrize(
         "source",
-        ["vlm_pooled", "vlm_pooled_state", "vlm_concat_linear", "vlm_concat_projected_linear"],
+        [
+            "vlm_pooled",
+            "vlm_pooled_state",
+            "vlm_concat_linear",
+            "vlm_concat_projected_linear",
+            "vlm_layer_pooled",
+        ],
     )
     def test_vlm_pooled_progress_head_does_not_add_action_token(self, source):
         class CaptureModel(torch.nn.Module):
@@ -624,13 +647,17 @@ class TestActionHeadForward:
         config = _small_config(
             enable_progress_head=True,
             progress_head_source=source,
+            progress_vlm_layer=1,
             add_pos_embed=False,
         )
         head = Gr00tN1d7ActionHead(config)
         head.model = CaptureModel()
         head.action_decoder = CaptureActionDecoder()
 
-        head.forward(_make_backbone_output(config), _make_action_input(config))
+        head.forward(
+            _make_backbone_output(config, num_hidden_states=2),
+            _make_action_input(config),
+        )
 
         assert len(head.model.hidden_states) == 1
         assert head.model.hidden_states[0].shape[1] == 1 + config.action_horizon
@@ -756,12 +783,19 @@ class TestActionHeadTrainableParams:
 
     @pytest.mark.parametrize(
         "source",
-        ["vlm_pooled", "vlm_pooled_state", "vlm_concat_linear", "vlm_concat_projected_linear"],
+        [
+            "vlm_pooled",
+            "vlm_pooled_state",
+            "vlm_concat_linear",
+            "vlm_concat_projected_linear",
+            "vlm_layer_pooled",
+        ],
     )
     def test_vlm_pooled_progress_only_leaves_only_progress_head_trainable(self, source):
         config = _small_config(
             enable_progress_head=True,
             progress_head_source=source,
+            progress_vlm_layer=1,
             tune_projector=False,
             tune_diffusion_model=False,
             tune_vlln=False,

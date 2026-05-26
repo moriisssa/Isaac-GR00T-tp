@@ -83,6 +83,7 @@ if __name__ == "__main__":
     config.model.tune_progress_head = ft_config.tune_progress_head
     config.model.progress_loss_weight = ft_config.progress_loss_weight
     config.model.progress_head_source = ft_config.progress_head_source
+    config.model.progress_vlm_layer = ft_config.progress_vlm_layer
     config.model.progress_output_type = ft_config.progress_output_type
     config.model.progress_num_bins = ft_config.progress_num_bins
     config.model.progress_soft_label_sigma = ft_config.progress_soft_label_sigma

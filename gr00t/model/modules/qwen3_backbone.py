@@ -228,6 +228,7 @@ class Qwen3Backbone(torch.nn.Module):
         self,
         vl_input: BatchFeature,
         progress_token: torch.Tensor | None = None,
+        return_hidden_states: bool = False,
     ) -> BatchFeature:
         self.set_frozen_modules_to_eval_mode()
         # 0. Set frozen module to eval
@@ -237,13 +238,14 @@ class Qwen3Backbone(torch.nn.Module):
             return self._forward_with_progress_token(vl_input, progress_token)
 
         outputs = self.model(**vl_input, output_hidden_states=True)
-        outputs = outputs.hidden_states[-1]
+        hidden_states = outputs.hidden_states
         image_mask = vl_input["input_ids"] == self.model.config.image_token_id
         attention_mask = vl_input["attention_mask"] == 1
-        return BatchFeature(
-            data={
-                "backbone_features": outputs,
-                "backbone_attention_mask": attention_mask,
-                "image_mask": image_mask,
-            }
-        )  # [B, T2, hidden_size]
+        data = {
+            "backbone_features": hidden_states[-1],
+            "backbone_attention_mask": attention_mask,
+            "image_mask": image_mask,
+        }
+        if return_hidden_states:
+            data["backbone_hidden_states"] = hidden_states
+        return BatchFeature(data=data)  # [B, T2, hidden_size]

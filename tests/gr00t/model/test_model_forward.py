@@ -79,7 +79,7 @@ def _make_mock_backbone(config, seq_len=8):
     """Return a mock backbone that produces correctly-shaped outputs."""
     backbone = MagicMock()
 
-    def fake_forward(vl_input, progress_token=None):
+    def fake_forward(vl_input, progress_token=None, return_hidden_states=False):
         B = 1
         # Try to infer batch size from input
         for v in vl_input.values():
@@ -108,6 +108,17 @@ def _make_mock_backbone(config, seq_len=8):
             ),
             "image_mask": torch.ones(B, output_seq_len, device=device, dtype=torch.bool),
         }
+        if return_hidden_states:
+            output["backbone_hidden_states"] = tuple(
+                torch.randn(
+                    B,
+                    output_seq_len,
+                    config.backbone_embedding_dim,
+                    device=device,
+                    dtype=dtype,
+                )
+                for _ in range(config.select_layer + 1)
+            )
         if progress_token is not None:
             output["progress_token_index"] = torch.full(
                 (B,),
@@ -241,12 +252,14 @@ class TestGr00tN1d7Forward:
             "vlm_concat_projected_linear",
             "vlm_pooled_dit",
             "state_multilayer_dit",
+            "vlm_layer_pooled",
         ],
     )
     def test_forward_with_vlm_pooled_progress_head(self, source):
         config = _make_small_config(
             enable_progress_head=True,
             progress_head_source=source,
+            progress_vlm_layer=1,
             progress_loss_weight=0.2,
         )
 
@@ -322,10 +335,15 @@ class TestGr00tN1d7GetAction:
             "vlm_concat_projected_linear",
             "vlm_pooled_dit",
             "state_multilayer_dit",
+            "vlm_layer_pooled",
         ],
     )
     def test_get_action_with_vlm_pooled_progress_head(self, source):
-        config = _make_small_config(enable_progress_head=True, progress_head_source=source)
+        config = _make_small_config(
+            enable_progress_head=True,
+            progress_head_source=source,
+            progress_vlm_layer=1,
+        )
 
         with patch("gr00t.model.gr00t_n1d7.gr00t_n1d7.get_backbone_cls") as mock_get_cls:
             mock_get_cls.return_value = lambda **kwargs: _make_mock_backbone(config)
