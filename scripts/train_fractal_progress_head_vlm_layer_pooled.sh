@@ -6,6 +6,7 @@ export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 export NO_ALBUMENTATIONS_UPDATE="${NO_ALBUMENTATIONS_UPDATE:-1}"
 
 PROGRESS_VLM_LAYER="${PROGRESS_VLM_LAYER:-}"
+PROGRESS_HEAD_SOURCE="${PROGRESS_HEAD_SOURCE:-vlm_layer_pooled}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -13,11 +14,16 @@ while [ "$#" -gt 0 ]; do
       PROGRESS_VLM_LAYER="$2"
       shift 2
       ;;
+    --progress-head-source)
+      PROGRESS_HEAD_SOURCE="$2"
+      shift 2
+      ;;
     --help|-h)
       cat <<'EOF'
 Usage:
   PROGRESS_VLM_LAYER=8 bash scripts/train_fractal_progress_head_vlm_layer_pooled.sh
   bash scripts/train_fractal_progress_head_vlm_layer_pooled.sh --progress-vlm-layer 8
+  PROGRESS_HEAD_SOURCE=vlm_layer_concat_linear PROGRESS_VLM_LAYER=16 bash scripts/train_fractal_progress_head_vlm_layer_pooled.sh
 EOF
       exit 0
       ;;
@@ -104,7 +110,7 @@ uv run torchrun --nproc_per_node="$NUM_GPUS" --master_port="$MASTER_PORT" \
   "${SAVE_ONLY_MODEL_FLAG[@]}" \
   --enable-progress-head \
   --tune-progress-head \
-  --progress-head-source vlm_layer_pooled \
+  --progress-head-source "$PROGRESS_HEAD_SOURCE" \
   --progress-vlm-layer "$PROGRESS_VLM_LAYER" \
   --no-tune-projector \
   --no-tune-diffusion-model \

@@ -93,12 +93,13 @@ class FinetuneConfig:
     "vlm_pooled_state" to concatenate pooled System2 features with the frozen
     robot-state embedding, "vlm_concat_linear" to flatten masked System2
     tokens, "vlm_concat_projected_linear" to project each token before
-    flattening, or "vlm_layer_pooled" to regress from one selected System2
-    hidden-state layer.
+    flattening, "vlm_layer_pooled" to regress from one selected System2
+    hidden-state layer, or "vlm_layer_concat_linear" to flatten one selected
+    System2 hidden-state layer.
     """
 
     progress_vlm_layer: int = -1
-    """Selected System2 hidden-state layer for progress_head_source="vlm_layer_pooled"."""
+    """Selected System2 hidden-state layer for layer-pooled/concat progress sources."""
 
     progress_output_type: str = "scalar"
     """
