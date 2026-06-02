@@ -89,6 +89,10 @@ class DataConfig:
     """Auxiliary progress label target: 'current' observation progress or 'chunk_end' progress."""
     tail_shrink_action_chunk: bool = False
     """If True, keep tail observations by shortening action chunks near episode end."""
+    progress_pairwise_training: bool = False
+    """If True, train progress from same-episode frame pairs instead of single steps."""
+    progress_pair_gap_min: float = 0.05
+    """Minimum normalized progress gap used when sampling pairwise progress examples."""
 
     # Subsample ratio for the dataset
     subsample_ratio: float = 1.0

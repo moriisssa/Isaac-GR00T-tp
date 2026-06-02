@@ -7,6 +7,9 @@ export NO_ALBUMENTATIONS_UPDATE="${NO_ALBUMENTATIONS_UPDATE:-1}"
 
 PROGRESS_VLM_LAYER="${PROGRESS_VLM_LAYER:-}"
 PROGRESS_HEAD_SOURCE="${PROGRESS_HEAD_SOURCE:-vlm_layer_pooled}"
+PROGRESS_LOSS_TYPE="${PROGRESS_LOSS_TYPE:-scalar}"
+PROGRESS_PAIR_GAP_MIN="${PROGRESS_PAIR_GAP_MIN:-0.05}"
+PROGRESS_PAIR_MARGIN_ALPHA="${PROGRESS_PAIR_MARGIN_ALPHA:-0.0}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -118,6 +121,9 @@ uv run torchrun --nproc_per_node="$NUM_GPUS" --master_port="$MASTER_PORT" \
   --use-ddp \
   --progress-loss-weight 1.0 \
   --progress-output-type scalar \
+  --progress-loss-type "$PROGRESS_LOSS_TYPE" \
+  --progress-pair-gap-min "$PROGRESS_PAIR_GAP_MIN" \
+  --progress-pair-margin-alpha "$PROGRESS_PAIR_MARGIN_ALPHA" \
   --progress-target "$PROGRESS_TARGET" \
   --tail-shrink-action-chunk \
   "${EXTRA_PROGRESS_ARGS[@]}"

@@ -109,11 +109,23 @@ class FinetuneConfig:
     for hard progress-bin classification with cross-entropy loss.
     """
 
+    progress_loss_type: str = "scalar"
+    """
+    Progress loss objective. Use "scalar" for single-frame supervised progress,
+    or "pairwise_bt" for same-episode Bradley-Terry frame-order training.
+    """
+
     progress_num_bins: int = 10
     """Number of progress bins used when progress_output_type is "soft_bins" or "hard_bins"."""
 
     progress_soft_label_sigma: float = 0.08
     """Gaussian soft-label width for progress_output_type="soft_bins"."""
+
+    progress_pair_gap_min: float = 0.05
+    """Minimum normalized progress gap for pairwise progress examples."""
+
+    progress_pair_margin_alpha: float = 0.0
+    """Margin weight for pairwise Bradley-Terry progress loss."""
 
     isolate_progress_action_attention: bool = False
     """

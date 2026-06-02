@@ -85,8 +85,10 @@ if __name__ == "__main__":
     config.model.progress_head_source = ft_config.progress_head_source
     config.model.progress_vlm_layer = ft_config.progress_vlm_layer
     config.model.progress_output_type = ft_config.progress_output_type
+    config.model.progress_loss_type = ft_config.progress_loss_type
     config.model.progress_num_bins = ft_config.progress_num_bins
     config.model.progress_soft_label_sigma = ft_config.progress_soft_label_sigma
+    config.model.progress_pair_margin_alpha = ft_config.progress_pair_margin_alpha
     config.model.isolate_progress_action_attention = ft_config.isolate_progress_action_attention
     config.model.random_rotation_angle = ft_config.random_rotation_angle
     config.model.color_jitter_params = ft_config.color_jitter_params
@@ -124,6 +126,8 @@ if __name__ == "__main__":
     config.data.num_shards_per_epoch = ft_config.num_shards_per_epoch
     config.data.progress_target = ft_config.progress_target
     config.data.tail_shrink_action_chunk = ft_config.tail_shrink_action_chunk
+    config.data.progress_pairwise_training = ft_config.progress_loss_type == "pairwise_bt"
+    config.data.progress_pair_gap_min = ft_config.progress_pair_gap_min
 
     config.training.save_only_model = ft_config.save_only_model
     config.training.skip_weight_loading = ft_config.skip_weight_loading

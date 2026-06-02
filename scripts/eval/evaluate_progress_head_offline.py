@@ -140,6 +140,42 @@ def _summarize(
     return summary
 
 
+def _summarize_pairwise(
+    rows: list[dict[str, Any]],
+    *,
+    target_key: str = "target_progress",
+    score_key: str = "progress_score",
+    gap_min: float = 0.05,
+) -> dict[str, Any]:
+    total = 0
+    correct = 0
+    gaps = []
+    for traj_id in sorted({row["traj_id"] for row in rows}):
+        traj_rows = sorted(
+            [row for row in rows if row["traj_id"] == traj_id],
+            key=lambda row: row["step_index"],
+        )
+        for i, row_a in enumerate(traj_rows):
+            for row_b in traj_rows[i + 1 :]:
+                target_diff = float(row_b[target_key]) - float(row_a[target_key])
+                if abs(target_diff) < gap_min:
+                    continue
+                score_diff = float(row_b.get(score_key, row_b["progress_pred"])) - float(
+                    row_a.get(score_key, row_a["progress_pred"])
+                )
+                if not np.isfinite(score_diff):
+                    continue
+                total += 1
+                gaps.append(abs(target_diff))
+                correct += int((score_diff > 0.0) == (target_diff > 0.0))
+    return {
+        "count": total,
+        "accuracy": float(correct / total) if total else float("nan"),
+        "gap_min": gap_min,
+        "gap_mean": float(np.mean(gaps)) if gaps else float("nan"),
+    }
+
+
 def _progress_to_class(progress: float, num_bins: int) -> int:
     return int(np.clip(np.floor(progress * num_bins), 0, num_bins - 1))
 
@@ -307,6 +343,7 @@ def _write_outputs(
         "target_progress",
         "current_progress",
         "chunk_end_progress",
+        "progress_score",
         "progress_pred",
         "progress_class_pred",
         "target_class",
@@ -334,6 +371,9 @@ def _write_outputs(
         "overall": _summarize(rows),
         "overall_current_axis": _summarize(rows, target_key="current_progress"),
         "overall_chunk_end_axis": _summarize(rows, target_key="chunk_end_progress"),
+        "pairwise": _summarize_pairwise(rows),
+        "pairwise_current_axis": _summarize_pairwise(rows, target_key="current_progress"),
+        "pairwise_chunk_end_axis": _summarize_pairwise(rows, target_key="chunk_end_progress"),
         "binned_curve": binned_curve,
         "binned_curve_current": binned_current_curve,
         "binned_curve_chunk_end": binned_chunk_end_curve,
@@ -469,6 +509,11 @@ def main(config: OfflineProgressEvalConfig) -> None:
                 raise RuntimeError("Checkpoint did not return progress predictions")
 
             pred = float(np.asarray(info["progress"], dtype=np.float32).reshape(-1)[0])
+            if "progress_score" in info:
+                score = float(np.asarray(info["progress_score"], dtype=np.float32).reshape(-1)[0])
+            else:
+                clipped_pred = np.clip(pred, 1e-6, 1.0 - 1e-6)
+                score = float(np.log(clipped_pred / (1.0 - clipped_pred)))
             if "progress_class" in info:
                 pred_class = int(np.asarray(info["progress_class"], dtype=np.int64).reshape(-1)[0])
             else:
@@ -503,6 +548,7 @@ def main(config: OfflineProgressEvalConfig) -> None:
                     "target_progress": target,
                     "current_progress": current_progress,
                     "chunk_end_progress": chunk_end_progress,
+                    "progress_score": score,
                     "progress_pred": pred,
                     "progress_class_pred": pred_class,
                     "target_class": target_class,

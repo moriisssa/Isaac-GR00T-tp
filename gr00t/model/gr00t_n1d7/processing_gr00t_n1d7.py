@@ -95,7 +95,7 @@ class Gr00tN1d7DataCollator:
         self.model_type = model_type
         self.model_name = model_name
 
-    def __call__(self, features: list[Dict[str, Any]]) -> BatchFeature:
+    def _collate_standard(self, features: list[Dict[str, Any]]) -> BatchFeature:
         batch = {}
         keys = list(set().union(*(elem.keys() for elem in features)))
 
@@ -134,6 +134,29 @@ class Gr00tN1d7DataCollator:
                 else:
                     batch[key] = torch.from_numpy(np.stack(values))
         return BatchFeature(data={"inputs": batch})
+
+    def __call__(self, features: list[Dict[str, Any]]) -> BatchFeature:
+        if features and "pair_a" in features[0]:
+            pair_features = [item["pair_a"] for item in features] + [
+                item["pair_b"] for item in features
+            ]
+            pair_inputs = self._collate_standard(pair_features)["inputs"]
+            pair_label = torch.as_tensor(
+                np.stack([item["pair_label"] for item in features]),
+                dtype=torch.get_default_dtype(),
+            ).reshape(-1)
+            pair_gap = torch.as_tensor(
+                np.stack([item["pair_gap"] for item in features]),
+                dtype=torch.get_default_dtype(),
+            ).reshape(-1)
+            return BatchFeature(
+                data={
+                    "pair_inputs": pair_inputs,
+                    "pair_label": pair_label,
+                    "pair_gap": pair_gap,
+                }
+            )
+        return self._collate_standard(features)
 
     def __str__(self):
         return f"Gr00tN1d7DataCollator(model_name={self.model_name}, model_type={self.model_type})"

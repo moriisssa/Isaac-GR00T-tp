@@ -140,8 +140,10 @@ class Gr00tN1d7Config(PretrainedConfig):
     progress_head_source: str = "action"
     progress_vlm_layer: int = -1
     progress_output_type: str = "scalar"
+    progress_loss_type: str = "scalar"
     progress_num_bins: int = 10
     progress_soft_label_sigma: float = 0.08
+    progress_pair_margin_alpha: float = 0.0
     progress_concat_project_dim: int = 64
     isolate_progress_action_attention: bool = False
 

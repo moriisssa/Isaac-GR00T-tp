@@ -36,6 +36,7 @@ import threading
 from typing import Any, Optional
 
 import torch
+import torch.nn.functional as F
 from transformers.trainer import TRAINER_STATE_NAME, Trainer, TrainerState, get_last_checkpoint
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
@@ -273,6 +274,49 @@ class Gr00tTrainer(Trainer):
             # compute_metrics=partial(compute_eval_accuracy, action_offset=self.action_offset),
         )
 
+    def _compute_pairwise_progress_loss(self, model, inputs):
+        pair_inputs = inputs["pair_inputs"]
+        pair_label = inputs["pair_label"]
+        pair_gap = inputs["pair_gap"]
+
+        outputs = model(inputs=pair_inputs)
+        progress_logits = outputs["progress_logits"].reshape(-1)
+        batch_size = pair_label.shape[0]
+        progress_logits_a = progress_logits[:batch_size]
+        progress_logits_b = progress_logits[batch_size : batch_size * 2]
+
+        pair_label = pair_label.to(
+            device=progress_logits.device,
+            dtype=progress_logits.dtype,
+        ).reshape_as(progress_logits_a)
+        pair_gap = pair_gap.to(
+            device=progress_logits.device,
+            dtype=progress_logits.dtype,
+        ).reshape_as(progress_logits_a)
+
+        score_diff = progress_logits_b - progress_logits_a
+        unwrapped_model = getattr(model, "module", model)
+        action_head = getattr(unwrapped_model, "action_head", None)
+        progress_loss_weight = float(getattr(action_head, "progress_loss_weight", 1.0))
+        margin_alpha = float(
+            getattr(getattr(action_head, "config", None), "progress_pair_margin_alpha", 0.0)
+        )
+        if margin_alpha > 0.0:
+            direction = pair_label.mul(2.0).sub(1.0)
+            progress_loss = F.softplus(-(direction * score_diff - margin_alpha * pair_gap)).mean()
+        else:
+            progress_loss = F.binary_cross_entropy_with_logits(score_diff, pair_label)
+
+        pair_prob = torch.sigmoid(score_diff)
+        pair_accuracy = pair_prob.ge(0.5).eq(pair_label.ge(0.5)).float().mean()
+        loss = progress_loss * progress_loss_weight
+        outputs["loss"] = loss
+        outputs["progress_loss"] = progress_loss
+        outputs["progress_pair_accuracy"] = pair_accuracy
+        outputs["progress_pair_score_diff_mean"] = score_diff.detach().mean()
+        outputs["progress_pair_gap_mean"] = pair_gap.detach().mean()
+        return loss, outputs
+
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         # Hide epoch from logged metrics as it's misleading for Iterable datasets.
         epoch = self.state.epoch
@@ -379,6 +423,37 @@ class Gr00tTrainer(Trainer):
         by calling it with ``return_outputs=True``.  After obtaining the loss
         *and* model outputs, we calculate accuracy and push it to the logger.
         """
+
+        if "pair_inputs" in inputs:
+            loss, outputs = self._compute_pairwise_progress_loss(model, inputs)
+            self.loss = loss
+            if self.state.global_step % self.args.logging_steps == 0 and model.training:
+                with torch.no_grad():
+                    progress_logs = {
+                        "train_progress_loss": self._nested_gather(
+                            outputs["progress_loss"].detach()
+                        )
+                        .mean()
+                        .item(),
+                        "train_progress_pair_accuracy": self._nested_gather(
+                            outputs["progress_pair_accuracy"].detach()
+                        )
+                        .mean()
+                        .item(),
+                        "train_progress_pair_score_diff_mean": self._nested_gather(
+                            outputs["progress_pair_score_diff_mean"].detach()
+                        )
+                        .mean()
+                        .item(),
+                        "train_progress_pair_gap_mean": self._nested_gather(
+                            outputs["progress_pair_gap_mean"].detach()
+                        )
+                        .mean()
+                        .item(),
+                    }
+                if self.args.local_rank in (-1, 0):
+                    self.log(progress_logs)
+            return (loss, outputs) if return_outputs else loss
 
         # Use parent implementation to preserve built-in functionality.
         loss, outputs = super().compute_loss(

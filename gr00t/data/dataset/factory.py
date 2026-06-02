@@ -19,7 +19,10 @@ from tqdm import tqdm
 
 from gr00t.configs.base_config import Config
 from gr00t.data.dataset.sharded_mixture_dataset import ShardedMixtureDataset
-from gr00t.data.dataset.sharded_single_step_dataset import ShardedSingleStepDataset
+from gr00t.data.dataset.sharded_single_step_dataset import (
+    ShardedProgressPairDataset,
+    ShardedSingleStepDataset,
+)
 from gr00t.data.embodiment_tags import EmbodimentTag
 from gr00t.data.interfaces import BaseProcessor
 from gr00t.data.stats import generate_rel_stats, generate_stats
@@ -62,7 +65,15 @@ class DatasetFactory:
                     generate_stats(dataset_path)
                     generate_rel_stats(dataset_path, EmbodimentTag(embodiment_tag))
                 barrier()
-                dataset = ShardedSingleStepDataset(
+                dataset_cls = (
+                    ShardedProgressPairDataset
+                    if self.config.data.progress_pairwise_training
+                    else ShardedSingleStepDataset
+                )
+                dataset_kwargs = {}
+                if self.config.data.progress_pairwise_training:
+                    dataset_kwargs["progress_pair_gap_min"] = self.config.data.progress_pair_gap_min
+                dataset = dataset_cls(
                     dataset_path=dataset_path,
                     embodiment_tag=EmbodimentTag(embodiment_tag),
                     modality_configs=self.config.data.modality_configs[embodiment_tag],
@@ -73,6 +84,7 @@ class DatasetFactory:
                     allow_padding=self.config.data.allow_padding,
                     progress_target=self.config.data.progress_target,
                     tail_shrink_action_chunk=self.config.data.tail_shrink_action_chunk,
+                    **dataset_kwargs,
                 )
                 datasets.append(dataset)
             dataset_lengths = np.array([len(dataset) for dataset in datasets])

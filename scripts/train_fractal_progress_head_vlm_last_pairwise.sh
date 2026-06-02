@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROGRESS_VLM_LAYER="${PROGRESS_VLM_LAYER:--1}"
+PROGRESS_HEAD_SOURCE="${PROGRESS_HEAD_SOURCE:-vlm_layer_pooled}"
+PROGRESS_LOSS_TYPE="${PROGRESS_LOSS_TYPE:-pairwise_bt}"
+PROGRESS_PAIR_GAP_MIN="${PROGRESS_PAIR_GAP_MIN:-0.05}"
+PROGRESS_PAIR_MARGIN_ALPHA="${PROGRESS_PAIR_MARGIN_ALPHA:-0.1}"
+PROGRESS_TARGET="${PROGRESS_TARGET:-current}"
+MAX_STEPS="${MAX_STEPS:-1000}"
+EXPERIMENT_NAME="${EXPERIMENT_NAME:-fractal_progress_vlm_last_pairwise_bt_1k_current}"
+OUTPUT_DIR="${OUTPUT_DIR:-output/progress_pairwise_vlm_last/${EXPERIMENT_NAME}}"
+
+export PROGRESS_VLM_LAYER
+export PROGRESS_HEAD_SOURCE
+export PROGRESS_LOSS_TYPE
+export PROGRESS_PAIR_GAP_MIN
+export PROGRESS_PAIR_MARGIN_ALPHA
+export PROGRESS_TARGET
+export MAX_STEPS
+export EXPERIMENT_NAME
+export OUTPUT_DIR
+
+bash scripts/train_fractal_progress_head_vlm_layer_pooled.sh "$@"

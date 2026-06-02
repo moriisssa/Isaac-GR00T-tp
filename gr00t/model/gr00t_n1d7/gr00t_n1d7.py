@@ -923,6 +923,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                     )
                 progress_logits = self._progress_logits(progress_output[:, progress_index])
             progress_pred = self._progress_pred_from_logits(progress_logits)
+            output["progress_logits"] = progress_logits
             output["progress_pred"] = progress_pred
             if self.progress_output_type in {"soft_bins", "hard_bins"}:
                 output["progress_class_pred"] = self._progress_class_from_logits(progress_logits)
@@ -1050,6 +1051,7 @@ class Gr00tN1d7ActionHead(nn.Module):
 
         dt = 1.0 / self.num_inference_timesteps
         vel_strength = torch.ones_like(actions)
+        progress_logits = None
         progress_pred = None
         progress_class_pred = None
         if (
@@ -1193,6 +1195,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             "state_features": state_features,
         }
         if self.enable_progress_head:
+            output["progress_logits"] = progress_logits
             output["progress_pred"] = progress_pred
             if progress_class_pred is not None:
                 output["progress_class_pred"] = progress_class_pred

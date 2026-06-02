@@ -408,6 +408,8 @@ class Gr00tPolicy(BasePolicy):
             model_pred = self.model.get_action(**collated_inputs)
         normalized_action = model_pred["action_pred"].float()
         info = {}
+        if "progress_logits" in model_pred:
+            info["progress_score"] = model_pred["progress_logits"].float().cpu().numpy()
         if "progress_pred" in model_pred:
             info["progress"] = model_pred["progress_pred"].float().cpu().numpy()
         if "progress_class_pred" in model_pred:

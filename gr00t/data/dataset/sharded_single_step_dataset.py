@@ -364,3 +364,91 @@ class ShardedSingleStepDataset(ShardedDataset):
     def get_initial_actions(self):
         """Get initial actions from the underlying episode loader."""
         return self.episode_loader.get_initial_actions()
+
+
+class ShardedProgressPairDataset(ShardedSingleStepDataset):
+    """Single-step sharded dataset that returns same-episode progress frame pairs."""
+
+    def __init__(
+        self,
+        *args,
+        progress_pair_gap_min: float = 0.05,
+        **kwargs,
+    ):
+        self.progress_pair_gap_min = progress_pair_gap_min
+        super().__init__(*args, **kwargs)
+
+    def _episode_progress_values(self, episode_data: pd.DataFrame, effective_length: int):
+        return np.asarray(
+            [
+                compute_progress_label(
+                    episode_data,
+                    step_index,
+                    action_horizon=self.action_horizon,
+                    target=self.progress_target,
+                )[0]
+                for step_index in range(effective_length)
+            ],
+            dtype=np.float32,
+        )
+
+    def _sample_pair_indices(
+        self,
+        step_index: int,
+        progress_values: np.ndarray,
+        rng: np.random.Generator,
+    ) -> tuple[int, int, float, float] | None:
+        progress_a = float(progress_values[step_index])
+        valid = np.flatnonzero(np.abs(progress_values - progress_a) >= self.progress_pair_gap_min)
+        if len(valid) == 0:
+            return None
+
+        partner_index = int(rng.choice(valid))
+        if rng.random() < 0.5:
+            first_index, second_index = step_index, partner_index
+        else:
+            first_index, second_index = partner_index, step_index
+
+        first_progress = float(progress_values[first_index])
+        second_progress = float(progress_values[second_index])
+        label = 1.0 if second_progress > first_progress else 0.0
+        gap = abs(second_progress - first_progress)
+        return first_index, second_index, label, gap
+
+    def get_pair_datapoint(
+        self,
+        episode_data: pd.DataFrame,
+        step_index: int,
+        progress_values: np.ndarray,
+        rng: np.random.Generator,
+    ) -> dict | None:
+        sampled_pair = self._sample_pair_indices(step_index, progress_values, rng)
+        if sampled_pair is None:
+            return None
+        first_index, second_index, label, gap = sampled_pair
+        return {
+            "pair_a": self.get_datapoint(episode_data, first_index),
+            "pair_b": self.get_datapoint(episode_data, second_index),
+            "pair_label": np.array([label], dtype=np.float32),
+            "pair_gap": np.array([gap], dtype=np.float32),
+        }
+
+    def get_shard(self, idx: int) -> list:
+        """Load one shard and convert each assigned step into one same-episode pair."""
+        episodes = self.sharded_episodes[idx]
+        datapoints = []
+        rng = np.random.default_rng(self.seed + idx)
+        for ep_idx, step_indices in episodes:
+            episode_data = self.episode_loader[ep_idx]
+            effective_length = self.get_effective_episode_length(ep_idx)
+            progress_values = self._episode_progress_values(episode_data, effective_length)
+            for step_index in step_indices:
+                pair_datapoint = self.get_pair_datapoint(
+                    episode_data,
+                    int(step_index),
+                    progress_values,
+                    rng,
+                )
+                if pair_datapoint is not None:
+                    datapoints.append(pair_datapoint)
+        return datapoints
