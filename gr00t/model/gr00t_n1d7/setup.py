@@ -93,8 +93,17 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 progress_head_source=self.config.model.progress_head_source,
                 progress_vlm_layer=self.config.model.progress_vlm_layer,
                 progress_output_type=self.config.model.progress_output_type,
+                progress_loss_type=self.config.model.progress_loss_type,
                 progress_num_bins=self.config.model.progress_num_bins,
                 progress_soft_label_sigma=self.config.model.progress_soft_label_sigma,
+                progress_pair_margin_alpha=self.config.model.progress_pair_margin_alpha,
+                progress_pair_scalar_loss_weight=(
+                    self.config.model.progress_pair_scalar_loss_weight
+                ),
+                progress_concat_project_dim=self.config.model.progress_concat_project_dim,
+                isolate_progress_action_attention=(
+                    self.config.model.isolate_progress_action_attention
+                ),
                 backbone_trainable_params_fp32=self.config.model.backbone_trainable_params_fp32,
                 load_bf16=self.config.model.load_bf16,
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
