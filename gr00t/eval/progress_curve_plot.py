@@ -9,6 +9,13 @@ from typing import Any
 
 import numpy as np
 
+from gr00t.eval.plot_style import (
+    REFERENCE_FIGSIZE,
+    apply_reference_plot_style,
+    save_reference_figure,
+    style_reference_axes,
+)
+
 
 def _parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -52,7 +59,8 @@ def write_progress_curve_plot(
     png_path = Path(png_path)
     png_path.parent.mkdir(parents=True, exist_ok=True)
 
-    plt.figure(figsize=(8, 5))
+    apply_reference_plot_style()
+    fig, ax = plt.subplots(figsize=REFERENCE_FIGSIZE)
     for episode in sorted({row["episode"] for row in rows}):
         episode_rows = sorted(
             [row for row in rows if row["episode"] == episode],
@@ -62,7 +70,7 @@ def write_progress_curve_plot(
             continue
         xs = [row["target_progress"] for row in episode_rows]
         ys = [row["progress_pred"] for row in episode_rows]
-        plt.plot(xs, ys, alpha=0.18, linewidth=1.0)
+        ax.plot(xs, ys, alpha=0.18, linewidth=1.0)
 
     if rows:
         bins = np.linspace(0.0, 1.0, 21)
@@ -74,7 +82,7 @@ def write_progress_curve_plot(
             float(np.mean(pred[bin_indices == idx])) if np.any(bin_indices == idx) else np.nan
             for idx in range(len(bin_centers))
         ]
-        plt.plot(
+        ax.plot(
             bin_centers,
             mean_pred,
             marker="o",
@@ -82,21 +90,20 @@ def write_progress_curve_plot(
             label="binned prediction mean",
         )
 
-    plt.plot([0.0, 1.0], [0.0, 1.0], "--", linewidth=1.5, label="ideal")
-    plt.xlim(0.0, 1.0)
+    ax.plot([0.0, 1.0], [0.0, 1.0], "--", linewidth=1.5, label="ideal")
+    ax.set_xlim(0.0, 1.0)
     if rows:
         pred_values = np.asarray([row["progress_pred"] for row in rows], dtype=np.float32)
         y_min = float(min(0.0, np.nanmin(pred_values)))
         y_max = float(max(1.0, np.nanmax(pred_values)))
         margin = max(0.05, 0.05 * (y_max - y_min))
-        plt.ylim(y_min - margin, y_max + margin)
+        ax.set_ylim(y_min - margin, y_max + margin)
     else:
-        plt.ylim(0.0, 1.0)
-    plt.xlabel("normalized rollout progress")
-    plt.ylabel("predicted progress")
-    plt.title(f"Progress prediction curve ({target})")
-    plt.grid(True, alpha=0.25)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(png_path, dpi=160)
-    plt.close()
+        ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("normalized rollout progress")
+    ax.set_ylabel("predicted progress")
+    ax.set_title(f"Progress prediction curve ({target})")
+    ax.legend(loc="best", frameon=True)
+    style_reference_axes(ax)
+    save_reference_figure(fig, png_path)
+    plt.close(fig)

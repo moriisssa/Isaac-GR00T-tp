@@ -22,6 +22,19 @@ from simpler_env.utils.env.observation_utils import get_image_from_maniskill2_ob
 from transforms3d import euler as te, quaternions as tq
 
 
+def _reset_simpler_env(env, seed=None, options=None):
+    reset_kwargs = {}
+    if seed is not None:
+        reset_kwargs["seed"] = seed
+    if options is not None:
+        reset_kwargs["options"] = options
+    try:
+        return env.reset(**reset_kwargs)
+    except TypeError:
+        reset_kwargs.pop("seed", None)
+        return env.reset(**reset_kwargs)
+
+
 class GoogleFractalEnv(gym.Env):
     def __init__(self, env_name: str, image_size: tuple[int, int]):
         env = simpler_env.make(env_name)
@@ -78,7 +91,7 @@ class GoogleFractalEnv(gym.Env):
         self.sticky_action_is_on = False
         self.sticky_gripper_action = 0.0
         self.gripper_action_repeat = 0
-        observation, info = self.env.reset()
+        observation, info = _reset_simpler_env(self.env, seed=seed, options=options)
         observation = self._process_observation(observation)
         info["success"] = False
         return observation, info
@@ -181,7 +194,7 @@ class WidowXBridgeEnv(gym.Env):
         self.default_rot = np.array([[0, 0, 1.0], [0, 1.0, 0], [-1.0, 0, 0]])
 
     def reset(self, seed=None, options=None):
-        observation, info = self.env.reset()
+        observation, info = _reset_simpler_env(self.env, seed=seed, options=options)
         observation = self._process_observation(observation)
         info["success"] = False
         return observation, info
