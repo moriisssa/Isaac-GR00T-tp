@@ -128,6 +128,13 @@ class FinetuneConfig:
     progress_pair_margin_alpha: float = 0.0
     """Margin weight for pairwise Bradley-Terry progress loss."""
 
+    progress_pair_scalar_loss_weight: float = 0.0
+    """
+    Optional scalar calibration loss weight used only with pairwise progress
+    training.  A value > 0 adds this multiple of the single-frame progress
+    BCE/CE loss to the pairwise objective.
+    """
+
     isolate_progress_action_attention: bool = False
     """
     If True, keep state/action token self-attention equivalent to the original GR00T path

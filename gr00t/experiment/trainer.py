@@ -301,17 +301,32 @@ class Gr00tTrainer(Trainer):
         margin_alpha = float(
             getattr(getattr(action_head, "config", None), "progress_pair_margin_alpha", 0.0)
         )
+        scalar_loss_weight = float(
+            getattr(
+                getattr(action_head, "config", None),
+                "progress_pair_scalar_loss_weight",
+                0.0,
+            )
+        )
         if margin_alpha > 0.0:
             direction = pair_label.mul(2.0).sub(1.0)
-            progress_loss = F.softplus(-(direction * score_diff - margin_alpha * pair_gap)).mean()
+            pairwise_loss = F.softplus(-(direction * score_diff - margin_alpha * pair_gap)).mean()
         else:
-            progress_loss = F.binary_cross_entropy_with_logits(score_diff, pair_label)
+            pairwise_loss = F.binary_cross_entropy_with_logits(score_diff, pair_label)
+        scalar_loss = outputs.get("progress_loss")
+        if scalar_loss_weight > 0.0 and scalar_loss is not None:
+            progress_loss = pairwise_loss + scalar_loss_weight * scalar_loss
+        else:
+            progress_loss = pairwise_loss
 
         pair_prob = torch.sigmoid(score_diff)
         pair_accuracy = pair_prob.ge(0.5).eq(pair_label.ge(0.5)).float().mean()
         loss = progress_loss * progress_loss_weight
         outputs["loss"] = loss
         outputs["progress_loss"] = progress_loss
+        outputs["progress_pairwise_loss"] = pairwise_loss
+        if scalar_loss is not None:
+            outputs["progress_scalar_loss"] = scalar_loss
         outputs["progress_pair_accuracy"] = pair_accuracy
         outputs["progress_pair_score_diff_mean"] = score_diff.detach().mean()
         outputs["progress_pair_gap_mean"] = pair_gap.detach().mean()
@@ -451,6 +466,18 @@ class Gr00tTrainer(Trainer):
                         .mean()
                         .item(),
                     }
+                    if "progress_pairwise_loss" in outputs:
+                        progress_logs["train_progress_pairwise_loss"] = (
+                            self._nested_gather(outputs["progress_pairwise_loss"].detach())
+                            .mean()
+                            .item()
+                        )
+                    if "progress_scalar_loss" in outputs:
+                        progress_logs["train_progress_scalar_loss"] = (
+                            self._nested_gather(outputs["progress_scalar_loss"].detach())
+                            .mean()
+                            .item()
+                        )
                 if self.args.local_rank in (-1, 0):
                     self.log(progress_logs)
             return (loss, outputs) if return_outputs else loss

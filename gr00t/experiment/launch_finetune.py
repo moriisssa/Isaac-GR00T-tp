@@ -89,6 +89,7 @@ if __name__ == "__main__":
     config.model.progress_num_bins = ft_config.progress_num_bins
     config.model.progress_soft_label_sigma = ft_config.progress_soft_label_sigma
     config.model.progress_pair_margin_alpha = ft_config.progress_pair_margin_alpha
+    config.model.progress_pair_scalar_loss_weight = ft_config.progress_pair_scalar_loss_weight
     config.model.isolate_progress_action_attention = ft_config.isolate_progress_action_attention
     config.model.random_rotation_angle = ft_config.random_rotation_angle
     config.model.color_jitter_params = ft_config.color_jitter_params

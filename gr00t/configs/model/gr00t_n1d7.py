@@ -146,6 +146,7 @@ class Gr00tN1d7Config(PretrainedConfig):
     progress_num_bins: int = 10
     progress_soft_label_sigma: float = 0.08
     progress_pair_margin_alpha: float = 0.0
+    progress_pair_scalar_loss_weight: float = 0.0
     progress_concat_project_dim: int = 64
     isolate_progress_action_attention: bool = False
 
