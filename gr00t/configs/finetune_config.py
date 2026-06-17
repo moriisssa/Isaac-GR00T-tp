@@ -94,8 +94,9 @@ class FinetuneConfig:
     robot-state embedding, "vlm_concat_linear" to flatten masked System2
     tokens, "vlm_concat_projected_linear" to project each token before
     flattening, "vlm_layer_pooled" to regress from one selected System2
-    hidden-state layer, or "vlm_layer_concat_linear" to flatten one selected
-    System2 hidden-state layer.
+    hidden-state layer, "vlm_layer_concat_linear" to flatten one selected
+    System2 hidden-state layer, or "vlm_layer_concat_projected_linear" to
+    project each selected-layer token before flattening.
     """
 
     progress_vlm_layer: int = -1

@@ -254,6 +254,7 @@ class TestGr00tN1d7Forward:
             "state_multilayer_dit",
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
+            "vlm_layer_concat_projected_linear",
         ],
     )
     def test_forward_with_vlm_pooled_progress_head(self, source):
@@ -338,6 +339,7 @@ class TestGr00tN1d7GetAction:
             "state_multilayer_dit",
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
+            "vlm_layer_concat_projected_linear",
         ],
     )
     def test_get_action_with_vlm_pooled_progress_head(self, source):

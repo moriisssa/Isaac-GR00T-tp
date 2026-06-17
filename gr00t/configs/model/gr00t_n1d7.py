@@ -131,7 +131,9 @@ class Gr00tN1d7Config(PretrainedConfig):
     # masked VLM tokens into a single linear probe ("vlm_concat_linear"),
     # project each VLM token before flattening ("vlm_concat_projected_linear"),
     # regress from one selected System2 hidden-state layer ("vlm_layer_pooled"),
-    # or flatten one selected System2 hidden-state layer ("vlm_layer_concat_linear").
+    # flatten one selected System2 hidden-state layer ("vlm_layer_concat_linear"),
+    # or project each selected-layer token before flattening
+    # ("vlm_layer_concat_projected_linear").
     # Labels are normalized to [0, 1]. The prediction head can either use one
     # sigmoid scalar, soft progress bins whose expected bin center is returned,
     # or hard progress bins trained with cross-entropy.
