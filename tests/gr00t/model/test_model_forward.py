@@ -250,11 +250,13 @@ class TestGr00tN1d7Forward:
             "vlm_pooled_state",
             "vlm_concat_linear",
             "vlm_concat_projected_linear",
+            "vlm_concat_attention_pool",
             "vlm_pooled_dit",
             "state_multilayer_dit",
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
             "vlm_layer_concat_projected_linear",
+            "vlm_layer_concat_attention_pool",
         ],
     )
     def test_forward_with_vlm_pooled_progress_head(self, source):
@@ -335,11 +337,13 @@ class TestGr00tN1d7GetAction:
             "vlm_pooled_state",
             "vlm_concat_linear",
             "vlm_concat_projected_linear",
+            "vlm_concat_attention_pool",
             "vlm_pooled_dit",
             "state_multilayer_dit",
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
             "vlm_layer_concat_projected_linear",
+            "vlm_layer_concat_attention_pool",
         ],
     )
     def test_get_action_with_vlm_pooled_progress_head(self, source):

@@ -148,9 +148,11 @@ class TestActionHeadForward:
             "vlm_pooled_state",
             "vlm_concat_linear",
             "vlm_concat_projected_linear",
+            "vlm_concat_attention_pool",
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
             "vlm_layer_concat_projected_linear",
+            "vlm_layer_concat_attention_pool",
         ],
     )
     def test_forward_with_vlm_pooled_progress_head(self, source):
@@ -182,6 +184,9 @@ class TestActionHeadForward:
             assert len(head.progress_head) == 2
         elif source in {"vlm_concat_projected_linear", "vlm_layer_concat_projected_linear"}:
             expected_dim = config.max_seq_len * config.progress_concat_project_dim
+            assert len(head.progress_head) == 2
+        elif source in {"vlm_concat_attention_pool", "vlm_layer_concat_attention_pool"}:
+            expected_dim = config.progress_concat_project_dim
             assert len(head.progress_head) == 2
         assert head.progress_head[0].normalized_shape == (expected_dim,)
 
@@ -215,6 +220,21 @@ class TestActionHeadForward:
         assert hidden.shape == expected_shape
         hidden_tokens = hidden.reshape(1, config.max_seq_len, config.progress_concat_project_dim)
         assert torch.equal(hidden_tokens[:, 2:], torch.zeros_like(hidden_tokens[:, 2:]))
+
+    def test_vlm_concat_attention_pool_progress_head_masks_tokens(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="vlm_concat_attention_pool",
+            progress_concat_project_dim=8,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        backbone_output = _make_backbone_output(config, batch_size=1, seq_len=4)
+        backbone_output.backbone_attention_mask[:, 2:] = 0
+
+        hidden = head._attention_pool_vlm_features(backbone_output)
+
+        assert hidden.shape == (1, config.progress_concat_project_dim)
+        assert torch.isfinite(hidden).all()
 
     def test_vlm_layer_concat_linear_progress_head_masks_and_pads_tokens(self):
         config = _small_config(
@@ -679,9 +699,11 @@ class TestActionHeadForward:
             "vlm_pooled_state",
             "vlm_concat_linear",
             "vlm_concat_projected_linear",
+            "vlm_concat_attention_pool",
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
             "vlm_layer_concat_projected_linear",
+            "vlm_layer_concat_attention_pool",
         ],
     )
     def test_vlm_pooled_progress_head_does_not_add_action_token(self, source):
@@ -850,9 +872,11 @@ class TestActionHeadTrainableParams:
             "vlm_pooled_state",
             "vlm_concat_linear",
             "vlm_concat_projected_linear",
+            "vlm_concat_attention_pool",
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
             "vlm_layer_concat_projected_linear",
+            "vlm_layer_concat_attention_pool",
         ],
     )
     def test_vlm_pooled_progress_only_leaves_only_progress_head_trainable(self, source):
@@ -873,6 +897,7 @@ class TestActionHeadTrainableParams:
             name.startswith("progress_head")
             or name.startswith("progress_vlm_token_norm")
             or name.startswith("progress_vlm_token_projector")
+            or name.startswith("progress_vlm_token_attention")
             for name in trainable
         )
 

@@ -100,6 +100,15 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 progress_pair_scalar_loss_weight=(
                     self.config.model.progress_pair_scalar_loss_weight
                 ),
+                progress_logit_l2_weight=self.config.model.progress_logit_l2_weight,
+                progress_logit_variance_weight=self.config.model.progress_logit_variance_weight,
+                progress_pair_smoothness_weight=(
+                    self.config.model.progress_pair_smoothness_weight
+                ),
+                progress_pair_smoothness_margin=(
+                    self.config.model.progress_pair_smoothness_margin
+                ),
+                progress_pair_monotonic_weight=self.config.model.progress_pair_monotonic_weight,
                 progress_concat_project_dim=self.config.model.progress_concat_project_dim,
                 isolate_progress_action_attention=(
                     self.config.model.isolate_progress_action_attention
@@ -135,6 +144,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                         "action_head.progress_vlm_projector",
                         "action_head.progress_vlm_token_norm",
                         "action_head.progress_vlm_token_projector",
+                        "action_head.progress_vlm_token_attention",
                     ]
                 )
             other_missing = [
@@ -150,6 +160,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 or k.startswith("action_head.progress_vlm_projector")
                 or k.startswith("action_head.progress_vlm_token_norm")
                 or k.startswith("action_head.progress_vlm_token_projector")
+                or k.startswith("action_head.progress_vlm_token_attention")
             ]
             if progress_missing:
                 logging.info(
@@ -165,6 +176,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                         "action_head.progress_vlm_projector",
                         "action_head.progress_vlm_token_norm",
                         "action_head.progress_vlm_token_projector",
+                        "action_head.progress_vlm_token_attention",
                     ]
                 )
             progress_unexpected = [

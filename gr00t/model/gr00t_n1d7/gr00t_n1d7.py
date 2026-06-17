@@ -105,17 +105,20 @@ class Gr00tN1d7ActionHead(nn.Module):
             "vlm_pooled_state",
             "vlm_concat_linear",
             "vlm_concat_projected_linear",
+            "vlm_concat_attention_pool",
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
             "vlm_layer_concat_projected_linear",
+            "vlm_layer_concat_attention_pool",
         }:
             raise ValueError(
                 f"Unsupported progress_head_source={self.progress_head_source!r}; "
                 "expected 'action', 'vlm', 'vlm_dit', 'vlm_pooled_dit', "
                 "'state_multilayer_dit', 'vlm_pooled', 'vlm_pooled_state', "
                 "'vlm_concat_linear', 'vlm_concat_projected_linear', "
-                "'vlm_layer_pooled', 'vlm_layer_concat_linear', or "
-                "'vlm_layer_concat_projected_linear'."
+                "'vlm_concat_attention_pool', 'vlm_layer_pooled', "
+                "'vlm_layer_concat_linear', 'vlm_layer_concat_projected_linear', "
+                "or 'vlm_layer_concat_attention_pool'."
             )
         self.progress_vlm_layer = int(getattr(config, "progress_vlm_layer", -1))
         self.progress_concat_project_dim = int(getattr(config, "progress_concat_project_dim", 64))
@@ -160,6 +163,11 @@ class Gr00tN1d7ActionHead(nn.Module):
                 "vlm_layer_concat_projected_linear",
             }:
                 progress_head_dim = config.max_seq_len * self.progress_concat_project_dim
+            elif self.progress_head_source in {
+                "vlm_concat_attention_pool",
+                "vlm_layer_concat_attention_pool",
+            }:
+                progress_head_dim = self.progress_concat_project_dim
             elif self.progress_head_source in {"vlm_pooled_dit", "state_multilayer_dit"}:
                 progress_head_dim = self.hidden_size
             else:
@@ -178,6 +186,8 @@ class Gr00tN1d7ActionHead(nn.Module):
             if self.progress_head_source in {
                 "vlm_concat_projected_linear",
                 "vlm_layer_concat_projected_linear",
+                "vlm_concat_attention_pool",
+                "vlm_layer_concat_attention_pool",
             }:
                 self.progress_vlm_token_norm = nn.LayerNorm(config.backbone_embedding_dim)
                 self.progress_vlm_token_projector = nn.Linear(
@@ -187,11 +197,23 @@ class Gr00tN1d7ActionHead(nn.Module):
                 nn.init.xavier_uniform_(self.progress_vlm_token_projector.weight)
                 nn.init.zeros_(self.progress_vlm_token_projector.bias)
             if self.progress_head_source in {
+                "vlm_concat_attention_pool",
+                "vlm_layer_concat_attention_pool",
+            }:
+                self.progress_vlm_token_attention = nn.Linear(
+                    self.progress_concat_project_dim,
+                    1,
+                )
+                nn.init.zeros_(self.progress_vlm_token_attention.weight)
+                nn.init.zeros_(self.progress_vlm_token_attention.bias)
+            if self.progress_head_source in {
                 "state_multilayer_dit",
                 "vlm_concat_linear",
                 "vlm_concat_projected_linear",
+                "vlm_concat_attention_pool",
                 "vlm_layer_concat_linear",
                 "vlm_layer_concat_projected_linear",
+                "vlm_layer_concat_attention_pool",
             }:
                 self.progress_head = nn.Sequential(
                     nn.LayerNorm(progress_head_dim),
@@ -273,6 +295,8 @@ class Gr00tN1d7ActionHead(nn.Module):
                 self.progress_vlm_token_norm.requires_grad_(False)
             if hasattr(self, "progress_vlm_token_projector"):
                 self.progress_vlm_token_projector.requires_grad_(False)
+            if hasattr(self, "progress_vlm_token_attention"):
+                self.progress_vlm_token_attention.requires_grad_(False)
         logger.debug(f"Tune action head projector: {self.tune_projector}")
         logger.debug(f"Tune action head diffusion model: {self.tune_diffusion_model}")
         logger.debug(f"Tune action head vlln: {self.tune_vlln}")
@@ -316,6 +340,8 @@ class Gr00tN1d7ActionHead(nn.Module):
                 self.progress_vlm_token_norm.eval()
             if hasattr(self, "progress_vlm_token_projector"):
                 self.progress_vlm_token_projector.eval()
+            if hasattr(self, "progress_vlm_token_attention"):
+                self.progress_vlm_token_attention.eval()
 
     def sample_time(self, batch_size, device, dtype):
         sample = self.beta_dist.sample([batch_size]).to(device, dtype=dtype)
@@ -347,6 +373,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             "vlm_pooled_state",
             "vlm_concat_linear",
             "vlm_concat_projected_linear",
+            "vlm_concat_attention_pool",
         }
 
     def _uses_vlm_layer_pooled_progress_head(self) -> bool:
@@ -354,6 +381,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             "vlm_layer_pooled",
             "vlm_layer_concat_linear",
             "vlm_layer_concat_projected_linear",
+            "vlm_layer_concat_attention_pool",
         }
 
     def _uses_non_action_progress_head(self) -> bool:
@@ -540,15 +568,12 @@ class Gr00tN1d7ActionHead(nn.Module):
             features = F.pad(features, (0, 0, 0, pad_tokens))
         return features.reshape(features.shape[0], -1)
 
-    def _concat_projected_vlm_layer_features(
-        self,
-        backbone_output: BatchFeature,
-    ) -> torch.Tensor:
+    def _get_selected_vlm_layer_features(self, backbone_output: BatchFeature) -> torch.Tensor:
         hidden_states = backbone_output.get("backbone_hidden_states")
         if hidden_states is None:
             raise ValueError(
                 "backbone_hidden_states is required for "
-                "progress_head_source='vlm_layer_concat_projected_linear'"
+                f"progress_head_source={self.progress_head_source!r}"
             )
         layer_index = self.progress_vlm_layer
         if layer_index < 0:
@@ -558,11 +583,14 @@ class Gr00tN1d7ActionHead(nn.Module):
                 f"progress_vlm_layer={self.progress_vlm_layer} is out of range for "
                 f"{len(hidden_states)} hidden-state tensors."
             )
-        features = hidden_states[layer_index]
-        mask = backbone_output.backbone_attention_mask.to(
-            device=features.device,
-            dtype=features.dtype,
-        )
+        return hidden_states[layer_index]
+
+    def _project_and_mask_vlm_tokens(
+        self,
+        features: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mask = mask.to(device=features.device, dtype=features.dtype)
         max_tokens = self.config.max_seq_len
         if features.shape[1] > max_tokens:
             features = features[:, :max_tokens]
@@ -571,6 +599,19 @@ class Gr00tN1d7ActionHead(nn.Module):
         features = self.progress_vlm_token_projector(features)
         features = F.gelu(features)
         features = features * mask.unsqueeze(-1)
+        return features, mask
+
+    def _concat_projected_vlm_layer_features(
+        self,
+        backbone_output: BatchFeature,
+    ) -> torch.Tensor:
+        features = self._get_selected_vlm_layer_features(backbone_output)
+        mask = backbone_output.backbone_attention_mask.to(
+            device=features.device,
+            dtype=features.dtype,
+        )
+        features, mask = self._project_and_mask_vlm_tokens(features, mask)
+        max_tokens = self.config.max_seq_len
         if features.shape[1] < max_tokens:
             pad_tokens = max_tokens - features.shape[1]
             features = F.pad(features, (0, 0, 0, pad_tokens))
@@ -598,18 +639,37 @@ class Gr00tN1d7ActionHead(nn.Module):
             device=backbone_features.device,
             dtype=backbone_features.dtype,
         )
+        backbone_features, mask = self._project_and_mask_vlm_tokens(backbone_features, mask)
         max_tokens = self.config.max_seq_len
-        if backbone_features.shape[1] > max_tokens:
-            backbone_features = backbone_features[:, :max_tokens]
-            mask = mask[:, :max_tokens]
-        backbone_features = self.progress_vlm_token_norm(backbone_features)
-        backbone_features = self.progress_vlm_token_projector(backbone_features)
-        backbone_features = F.gelu(backbone_features)
-        backbone_features = backbone_features * mask.unsqueeze(-1)
         if backbone_features.shape[1] < max_tokens:
             pad_tokens = max_tokens - backbone_features.shape[1]
             backbone_features = F.pad(backbone_features, (0, 0, 0, pad_tokens))
         return backbone_features.reshape(backbone_features.shape[0], -1)
+
+    def _attention_pool_projected_vlm_tokens(
+        self,
+        features: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        features, mask = self._project_and_mask_vlm_tokens(features, mask)
+        scores = self.progress_vlm_token_attention(features).squeeze(-1)
+        scores = scores.masked_fill(mask <= 0, -1e4)
+        weights = torch.softmax(scores.float(), dim=1).to(dtype=features.dtype)
+        weights = weights * mask
+        weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        return (features * weights.unsqueeze(-1)).sum(dim=1)
+
+    def _attention_pool_vlm_features(self, backbone_output: BatchFeature) -> torch.Tensor:
+        return self._attention_pool_projected_vlm_tokens(
+            features=backbone_output.backbone_features,
+            mask=backbone_output.backbone_attention_mask,
+        )
+
+    def _attention_pool_vlm_layer_features(self, backbone_output: BatchFeature) -> torch.Tensor:
+        return self._attention_pool_projected_vlm_tokens(
+            features=self._get_selected_vlm_layer_features(backbone_output),
+            mask=backbone_output.backbone_attention_mask,
+        )
 
     def _compute_vlm_pooled_progress_hidden(
         self,
@@ -620,6 +680,8 @@ class Gr00tN1d7ActionHead(nn.Module):
             return self._concat_vlm_features(backbone_output)
         if self.progress_head_source == "vlm_concat_projected_linear":
             return self._concat_projected_vlm_features(backbone_output)
+        if self.progress_head_source == "vlm_concat_attention_pool":
+            return self._attention_pool_vlm_features(backbone_output)
         pooled_features = self._pool_vlm_features(backbone_output)
         if self.progress_head_source == "vlm_pooled_state":
             return torch.cat((pooled_features, state_features.squeeze(1)), dim=-1)
@@ -633,6 +695,8 @@ class Gr00tN1d7ActionHead(nn.Module):
             return self._concat_vlm_layer_features(backbone_output)
         if self.progress_head_source == "vlm_layer_concat_projected_linear":
             return self._concat_projected_vlm_layer_features(backbone_output)
+        if self.progress_head_source == "vlm_layer_concat_attention_pool":
+            return self._attention_pool_vlm_layer_features(backbone_output)
         return self._pool_vlm_layer_features(backbone_output)
 
     def _make_progress_features(
@@ -665,6 +729,9 @@ class Gr00tN1d7ActionHead(nn.Module):
                 parameter.register_hook(_sanitize_grad)
         if hasattr(self, "progress_vlm_token_projector"):
             for parameter in self.progress_vlm_token_projector.parameters():
+                parameter.register_hook(_sanitize_grad)
+        if hasattr(self, "progress_vlm_token_attention"):
+            for parameter in self.progress_vlm_token_attention.parameters():
                 parameter.register_hook(_sanitize_grad)
 
     def _make_progress_route_features(

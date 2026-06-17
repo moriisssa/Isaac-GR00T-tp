@@ -93,10 +93,13 @@ class FinetuneConfig:
     "vlm_pooled_state" to concatenate pooled System2 features with the frozen
     robot-state embedding, "vlm_concat_linear" to flatten masked System2
     tokens, "vlm_concat_projected_linear" to project each token before
-    flattening, "vlm_layer_pooled" to regress from one selected System2
-    hidden-state layer, "vlm_layer_concat_linear" to flatten one selected
-    System2 hidden-state layer, or "vlm_layer_concat_projected_linear" to
-    project each selected-layer token before flattening.
+    flattening, "vlm_concat_attention_pool" to use learned attention pooling
+    over projected System2 tokens, "vlm_layer_pooled" to regress from one
+    selected System2 hidden-state layer, "vlm_layer_concat_linear" to flatten
+    one selected System2 hidden-state layer, "vlm_layer_concat_projected_linear"
+    to project each selected-layer token before flattening, or
+    "vlm_layer_concat_attention_pool" to use learned attention pooling over
+    projected tokens from one selected System2 hidden-state layer.
     """
 
     progress_vlm_layer: int = -1
@@ -133,6 +136,33 @@ class FinetuneConfig:
     Optional scalar calibration loss weight used only with pairwise progress
     training.  A value > 0 adds this multiple of the single-frame progress
     BCE/CE loss to the pairwise objective.
+    """
+
+    progress_logit_l2_weight: float = 0.0
+    """
+    Optional pairwise-training regularizer on absolute scalar logits.  This is
+    useful for concat heads whose logits otherwise saturate sigmoid near 0/1.
+    """
+
+    progress_logit_variance_weight: float = 0.0
+    """
+    Optional pairwise-training regularizer on score-difference variance.  This
+    limits very spread-out pair scores and can reduce abrupt output jumps.
+    """
+
+    progress_pair_smoothness_weight: float = 0.0
+    """
+    Optional pair-level smoothness weight. It penalizes predicted progress
+    differences that exceed the true normalized pair gap plus a margin.
+    """
+
+    progress_pair_smoothness_margin: float = 0.05
+    """Allowed extra predicted progress difference before smoothness is penalized."""
+
+    progress_pair_monotonic_weight: float = 0.0
+    """
+    Optional monotonic hinge on sigmoid progress values for pairwise samples.
+    It penalizes reversed progress order in probability space.
     """
 
     isolate_progress_action_attention: bool = False

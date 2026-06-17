@@ -130,10 +130,13 @@ class Gr00tN1d7Config(PretrainedConfig):
     # regress from pooled VLM features with optional state features, flatten
     # masked VLM tokens into a single linear probe ("vlm_concat_linear"),
     # project each VLM token before flattening ("vlm_concat_projected_linear"),
-    # regress from one selected System2 hidden-state layer ("vlm_layer_pooled"),
-    # flatten one selected System2 hidden-state layer ("vlm_layer_concat_linear"),
-    # or project each selected-layer token before flattening
-    # ("vlm_layer_concat_projected_linear").
+    # or use learned attention pooling over projected VLM tokens
+    # ("vlm_concat_attention_pool"). It can also regress from one selected
+    # System2 hidden-state layer ("vlm_layer_pooled"), flatten one selected
+    # System2 hidden-state layer ("vlm_layer_concat_linear"), project each
+    # selected-layer token before flattening ("vlm_layer_concat_projected_linear"),
+    # or use learned attention pooling over projected tokens from one selected
+    # layer ("vlm_layer_concat_attention_pool").
     # Labels are normalized to [0, 1]. The prediction head can either use one
     # sigmoid scalar, soft progress bins whose expected bin center is returned,
     # or hard progress bins trained with cross-entropy.
@@ -147,6 +150,11 @@ class Gr00tN1d7Config(PretrainedConfig):
     progress_soft_label_sigma: float = 0.08
     progress_pair_margin_alpha: float = 0.0
     progress_pair_scalar_loss_weight: float = 0.0
+    progress_logit_l2_weight: float = 0.0
+    progress_logit_variance_weight: float = 0.0
+    progress_pair_smoothness_weight: float = 0.0
+    progress_pair_smoothness_margin: float = 0.05
+    progress_pair_monotonic_weight: float = 0.0
     progress_concat_project_dim: int = 64
     isolate_progress_action_attention: bool = False
 
