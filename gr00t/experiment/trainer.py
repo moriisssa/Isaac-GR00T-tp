@@ -307,6 +307,13 @@ class Gr00tTrainer(Trainer):
                 0.0,
             )
         )
+        boundary_loss_weight = float(
+            getattr(
+                action_head_config,
+                "progress_pair_boundary_loss_weight",
+                0.0,
+            )
+        )
         logit_l2_weight = float(getattr(action_head_config, "progress_logit_l2_weight", 0.0))
         logit_variance_weight = float(
             getattr(action_head_config, "progress_logit_variance_weight", 0.0)
@@ -330,6 +337,22 @@ class Gr00tTrainer(Trainer):
         progress_loss = pairwise_loss
         if scalar_loss_weight > 0.0 and scalar_loss is not None:
             progress_loss = progress_loss + scalar_loss_weight * scalar_loss
+
+        boundary_loss = None
+        if (
+            boundary_loss_weight > 0.0
+            and "boundary_inputs" in inputs
+            and "boundary_label" in inputs
+        ):
+            boundary_outputs = model(inputs=inputs["boundary_inputs"])
+            boundary_logits = boundary_outputs["progress_logits"].reshape(-1)
+            boundary_label = inputs["boundary_label"].to(
+                device=boundary_logits.device,
+                dtype=boundary_logits.dtype,
+            ).reshape_as(boundary_logits)
+            boundary_pred = torch.sigmoid(boundary_logits)
+            boundary_loss = F.mse_loss(boundary_pred, boundary_label)
+            progress_loss = progress_loss + boundary_loss_weight * boundary_loss
 
         logit_l2_loss = None
         if logit_l2_weight > 0.0:
@@ -367,6 +390,8 @@ class Gr00tTrainer(Trainer):
         outputs["progress_pairwise_loss"] = pairwise_loss
         if scalar_loss is not None:
             outputs["progress_scalar_loss"] = scalar_loss
+        if boundary_loss is not None:
+            outputs["progress_pair_boundary_loss"] = boundary_loss
         outputs["progress_pair_accuracy"] = pair_accuracy
         outputs["progress_pair_score_diff_mean"] = score_diff.detach().mean()
         outputs["progress_pair_gap_mean"] = pair_gap.detach().mean()
@@ -545,6 +570,10 @@ class Gr00tTrainer(Trainer):
                         (
                             "progress_pair_monotonic_loss",
                             "train_progress_pair_monotonic_loss",
+                        ),
+                        (
+                            "progress_pair_boundary_loss",
+                            "train_progress_pair_boundary_loss",
                         ),
                     ):
                         if output_key in outputs:

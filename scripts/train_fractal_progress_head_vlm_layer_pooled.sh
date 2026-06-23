@@ -11,6 +11,7 @@ PROGRESS_LOSS_TYPE="${PROGRESS_LOSS_TYPE:-scalar}"
 PROGRESS_PAIR_GAP_MIN="${PROGRESS_PAIR_GAP_MIN:-0.05}"
 PROGRESS_PAIR_MARGIN_ALPHA="${PROGRESS_PAIR_MARGIN_ALPHA:-0.0}"
 PROGRESS_PAIR_SCALAR_LOSS_WEIGHT="${PROGRESS_PAIR_SCALAR_LOSS_WEIGHT:-0.0}"
+PROGRESS_PAIR_BOUNDARY_LOSS_WEIGHT="${PROGRESS_PAIR_BOUNDARY_LOSS_WEIGHT:-0.0}"
 PROGRESS_LOGIT_L2_WEIGHT="${PROGRESS_LOGIT_L2_WEIGHT:-0.0}"
 PROGRESS_LOGIT_VARIANCE_WEIGHT="${PROGRESS_LOGIT_VARIANCE_WEIGHT:-0.0}"
 PROGRESS_PAIR_SMOOTHNESS_WEIGHT="${PROGRESS_PAIR_SMOOTHNESS_WEIGHT:-0.0}"
@@ -27,6 +28,10 @@ while [ "$#" -gt 0 ]; do
       PROGRESS_HEAD_SOURCE="$2"
       shift 2
       ;;
+    --progress-pair-boundary-loss-weight)
+      PROGRESS_PAIR_BOUNDARY_LOSS_WEIGHT="$2"
+      shift 2
+      ;;
     --help|-h)
       cat <<'EOF'
 Usage:
@@ -34,6 +39,7 @@ Usage:
   bash scripts/train_fractal_progress_head_vlm_layer_pooled.sh --progress-vlm-layer 8
   PROGRESS_HEAD_SOURCE=vlm_layer_concat_linear PROGRESS_VLM_LAYER=16 bash scripts/train_fractal_progress_head_vlm_layer_pooled.sh
   PROGRESS_HEAD_SOURCE=vlm_concat_attention_pool PROGRESS_VLM_LAYER=16 PROGRESS_LOSS_TYPE=pairwise_bt bash scripts/train_fractal_progress_head_vlm_layer_pooled.sh
+  PROGRESS_PAIR_BOUNDARY_LOSS_WEIGHT=0.1 PROGRESS_HEAD_SOURCE=vlm_concat_attention_pool PROGRESS_VLM_LAYER=16 PROGRESS_LOSS_TYPE=pairwise_bt bash scripts/train_fractal_progress_head_vlm_layer_pooled.sh
 EOF
       exit 0
       ;;
@@ -132,6 +138,7 @@ uv run torchrun --nproc_per_node="$NUM_GPUS" --master_port="$MASTER_PORT" \
   --progress-pair-gap-min "$PROGRESS_PAIR_GAP_MIN" \
   --progress-pair-margin-alpha "$PROGRESS_PAIR_MARGIN_ALPHA" \
   --progress-pair-scalar-loss-weight "$PROGRESS_PAIR_SCALAR_LOSS_WEIGHT" \
+  --progress-pair-boundary-loss-weight "$PROGRESS_PAIR_BOUNDARY_LOSS_WEIGHT" \
   --progress-logit-l2-weight "$PROGRESS_LOGIT_L2_WEIGHT" \
   --progress-logit-variance-weight "$PROGRESS_LOGIT_VARIANCE_WEIGHT" \
   --progress-pair-smoothness-weight "$PROGRESS_PAIR_SMOOTHNESS_WEIGHT" \

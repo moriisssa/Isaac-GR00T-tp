@@ -141,6 +141,20 @@ class Gr00tN1d7DataCollator:
                 item["pair_b"] for item in features
             ]
             pair_inputs = self._collate_standard(pair_features)["inputs"]
+            boundary_inputs = None
+            boundary_label = None
+            if "boundary_start" in features[0] and "boundary_end" in features[0]:
+                boundary_features = [item["boundary_start"] for item in features] + [
+                    item["boundary_end"] for item in features
+                ]
+                boundary_inputs = self._collate_standard(boundary_features)["inputs"]
+                boundary_label = torch.cat(
+                    (
+                        torch.zeros(len(features), dtype=torch.get_default_dtype()),
+                        torch.ones(len(features), dtype=torch.get_default_dtype()),
+                    ),
+                    dim=0,
+                )
             pair_label = torch.as_tensor(
                 np.stack([item["pair_label"] for item in features]),
                 dtype=torch.get_default_dtype(),
@@ -149,13 +163,15 @@ class Gr00tN1d7DataCollator:
                 np.stack([item["pair_gap"] for item in features]),
                 dtype=torch.get_default_dtype(),
             ).reshape(-1)
-            return BatchFeature(
-                data={
-                    "pair_inputs": pair_inputs,
-                    "pair_label": pair_label,
-                    "pair_gap": pair_gap,
-                }
-            )
+            batch = {
+                "pair_inputs": pair_inputs,
+                "pair_label": pair_label,
+                "pair_gap": pair_gap,
+            }
+            if boundary_inputs is not None and boundary_label is not None:
+                batch["boundary_inputs"] = boundary_inputs
+                batch["boundary_label"] = boundary_label
+            return BatchFeature(data=batch)
         return self._collate_standard(features)
 
     def __str__(self):

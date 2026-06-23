@@ -426,9 +426,12 @@ class ShardedProgressPairDataset(ShardedSingleStepDataset):
         if sampled_pair is None:
             return None
         first_index, second_index, label, gap = sampled_pair
+        last_index = int(len(progress_values) - 1)
         return {
             "pair_a": self.get_datapoint(episode_data, first_index),
             "pair_b": self.get_datapoint(episode_data, second_index),
+            "boundary_start": self.get_datapoint(episode_data, 0),
+            "boundary_end": self.get_datapoint(episode_data, last_index),
             "pair_label": np.array([label], dtype=np.float32),
             "pair_gap": np.array([gap], dtype=np.float32),
         }
