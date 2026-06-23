@@ -42,11 +42,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--embodiment-tag", default="SIMPLER_ENV_GOOGLE")
-    parser.add_argument(
-        "--device",
-        default="0",
-        help="Device passed to Gr00tPolicy through create_gr00t_sim_policy.",
-    )
     return parser.parse_args()
 
 
