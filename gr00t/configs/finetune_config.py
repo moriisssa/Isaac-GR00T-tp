@@ -138,13 +138,6 @@ class FinetuneConfig:
     BCE/CE loss to the pairwise objective.
     """
 
-    progress_pair_boundary_loss_weight: float = 0.0
-    """
-    Optional boundary calibration loss weight used only with pairwise progress
-    training. A value > 0 adds a supervised loss on each sampled episode's
-    first and last effective frames, encouraging predictions near 0 and 1.
-    """
-
     progress_logit_l2_weight: float = 0.0
     """
     Optional pairwise-training regularizer on absolute scalar logits.  This is

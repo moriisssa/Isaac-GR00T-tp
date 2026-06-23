@@ -150,7 +150,6 @@ class Gr00tN1d7Config(PretrainedConfig):
     progress_soft_label_sigma: float = 0.08
     progress_pair_margin_alpha: float = 0.0
     progress_pair_scalar_loss_weight: float = 0.0
-    progress_pair_boundary_loss_weight: float = 0.0
     progress_logit_l2_weight: float = 0.0
     progress_logit_variance_weight: float = 0.0
     progress_pair_smoothness_weight: float = 0.0

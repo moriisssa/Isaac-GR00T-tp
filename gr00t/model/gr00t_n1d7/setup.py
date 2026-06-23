@@ -100,9 +100,6 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 progress_pair_scalar_loss_weight=(
                     self.config.model.progress_pair_scalar_loss_weight
                 ),
-                progress_pair_boundary_loss_weight=(
-                    self.config.model.progress_pair_boundary_loss_weight
-                ),
                 progress_logit_l2_weight=self.config.model.progress_logit_l2_weight,
                 progress_logit_variance_weight=self.config.model.progress_logit_variance_weight,
                 progress_pair_smoothness_weight=(

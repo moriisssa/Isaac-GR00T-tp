@@ -90,9 +90,6 @@ if __name__ == "__main__":
     config.model.progress_soft_label_sigma = ft_config.progress_soft_label_sigma
     config.model.progress_pair_margin_alpha = ft_config.progress_pair_margin_alpha
     config.model.progress_pair_scalar_loss_weight = ft_config.progress_pair_scalar_loss_weight
-    config.model.progress_pair_boundary_loss_weight = (
-        ft_config.progress_pair_boundary_loss_weight
-    )
     config.model.progress_logit_l2_weight = ft_config.progress_logit_l2_weight
     config.model.progress_logit_variance_weight = ft_config.progress_logit_variance_weight
     config.model.progress_pair_smoothness_weight = ft_config.progress_pair_smoothness_weight
