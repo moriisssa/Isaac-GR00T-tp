@@ -426,7 +426,10 @@ class Gr00tPolicy(BasePolicy):
             if key in model_pred:
                 value = model_pred[key]
                 if isinstance(value, torch.Tensor):
-                    info[key] = value.detach().cpu().numpy()
+                    value = value.detach()
+                    if torch.is_floating_point(value):
+                        value = value.float()
+                    info[key] = value.cpu().numpy()
                 else:
                     info[key] = value
 
