@@ -220,6 +220,8 @@ class Qwen3Backbone(torch.nn.Module):
                 "backbone_features": outputs.last_hidden_state,
                 "backbone_attention_mask": progress_attention_mask == 1,
                 "image_mask": image_mask,
+                "input_ids": progress_input_ids,
+                "image_grid_thw": vl_input.get("image_grid_thw"),
                 "progress_token_index": progress_token_index,
             }
         )
@@ -245,6 +247,8 @@ class Qwen3Backbone(torch.nn.Module):
             "backbone_features": hidden_states[-1],
             "backbone_attention_mask": attention_mask,
             "image_mask": image_mask,
+            "input_ids": vl_input["input_ids"],
+            "image_grid_thw": vl_input.get("image_grid_thw"),
         }
         if return_hidden_states:
             data["backbone_hidden_states"] = hidden_states

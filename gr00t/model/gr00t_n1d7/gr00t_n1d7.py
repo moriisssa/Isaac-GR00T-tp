@@ -650,38 +650,63 @@ class Gr00tN1d7ActionHead(nn.Module):
         self,
         features: torch.Tensor,
         mask: torch.Tensor,
-    ) -> torch.Tensor:
+        return_debug: bool = False,
+    ) -> torch.Tensor | BatchFeature:
         features, mask = self._project_and_mask_vlm_tokens(features, mask)
         scores = self.progress_vlm_token_attention(features).squeeze(-1)
         scores = scores.masked_fill(mask <= 0, -1e4)
         weights = torch.softmax(scores.float(), dim=1).to(dtype=features.dtype)
         weights = weights * mask
         weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
-        return (features * weights.unsqueeze(-1)).sum(dim=1)
+        pooled = (features * weights.unsqueeze(-1)).sum(dim=1)
+        if not return_debug:
+            return pooled
+        return BatchFeature(
+            data={
+                "progress_hidden": pooled,
+                "progress_token_weights": weights,
+                "progress_token_scores": scores,
+                "progress_token_mask": mask > 0,
+            }
+        )
 
-    def _attention_pool_vlm_features(self, backbone_output: BatchFeature) -> torch.Tensor:
+    def _attention_pool_vlm_features(
+        self,
+        backbone_output: BatchFeature,
+        return_debug: bool = False,
+    ) -> torch.Tensor | BatchFeature:
         return self._attention_pool_projected_vlm_tokens(
             features=backbone_output.backbone_features,
             mask=backbone_output.backbone_attention_mask,
+            return_debug=return_debug,
         )
 
-    def _attention_pool_vlm_layer_features(self, backbone_output: BatchFeature) -> torch.Tensor:
+    def _attention_pool_vlm_layer_features(
+        self,
+        backbone_output: BatchFeature,
+        return_debug: bool = False,
+    ) -> torch.Tensor | BatchFeature:
         return self._attention_pool_projected_vlm_tokens(
             features=self._get_selected_vlm_layer_features(backbone_output),
             mask=backbone_output.backbone_attention_mask,
+            return_debug=return_debug,
         )
 
     def _compute_vlm_pooled_progress_hidden(
         self,
         backbone_output: BatchFeature,
         state_features: torch.Tensor,
-    ) -> torch.Tensor:
+        return_progress_token_weights: bool = False,
+    ) -> torch.Tensor | BatchFeature:
         if self.progress_head_source == "vlm_concat_linear":
             return self._concat_vlm_features(backbone_output)
         if self.progress_head_source == "vlm_concat_projected_linear":
             return self._concat_projected_vlm_features(backbone_output)
         if self.progress_head_source == "vlm_concat_attention_pool":
-            return self._attention_pool_vlm_features(backbone_output)
+            return self._attention_pool_vlm_features(
+                backbone_output,
+                return_debug=return_progress_token_weights,
+            )
         pooled_features = self._pool_vlm_features(backbone_output)
         if self.progress_head_source == "vlm_pooled_state":
             return torch.cat((pooled_features, state_features.squeeze(1)), dim=-1)
@@ -690,13 +715,17 @@ class Gr00tN1d7ActionHead(nn.Module):
     def _compute_vlm_layer_pooled_progress_hidden(
         self,
         backbone_output: BatchFeature,
-    ) -> torch.Tensor:
+        return_progress_token_weights: bool = False,
+    ) -> torch.Tensor | BatchFeature:
         if self.progress_head_source == "vlm_layer_concat_linear":
             return self._concat_vlm_layer_features(backbone_output)
         if self.progress_head_source == "vlm_layer_concat_projected_linear":
             return self._concat_projected_vlm_layer_features(backbone_output)
         if self.progress_head_source == "vlm_layer_concat_attention_pool":
-            return self._attention_pool_vlm_layer_features(backbone_output)
+            return self._attention_pool_vlm_layer_features(
+                backbone_output,
+                return_debug=return_progress_token_weights,
+            )
         return self._pool_vlm_layer_features(backbone_output)
 
     def _make_progress_features(
@@ -1064,6 +1093,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         backbone_output: BatchFeature,
         action_input: BatchFeature,
         progress_backbone_output: BatchFeature | None = None,
+        return_progress_token_weights: bool = False,
     ) -> BatchFeature:
         """
         Encode features for the action head.
@@ -1082,6 +1112,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 - state_features: [B, 1, input_embedding_dim]
         """
         vlm_progress_hidden = None
+        progress_token_debug = None
         if self._uses_vlm_progress_head():
             vlm_progress_hidden = self._compute_vlm_progress_hidden(backbone_output)
         elif self._uses_vlm_dit_progress_head() and progress_backbone_output is None:
@@ -1109,6 +1140,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             vlm_progress_hidden = self._compute_vlm_pooled_progress_hidden(
                 backbone_output=backbone_output,
                 state_features=state_features,
+                return_progress_token_weights=return_progress_token_weights,
             )
         elif self._uses_vlm_pooled_dit_progress_head():
             vlm_progress_hidden = self._compute_vlm_pooled_dit_progress_hidden(
@@ -1123,11 +1155,30 @@ class Gr00tN1d7ActionHead(nn.Module):
         elif self._uses_vlm_layer_pooled_progress_head():
             vlm_progress_hidden = self._compute_vlm_layer_pooled_progress_hidden(
                 backbone_output=backbone_output,
+                return_progress_token_weights=return_progress_token_weights,
             )
 
         features = {"backbone_features": vl_embeds, "state_features": state_features}
+        if isinstance(vlm_progress_hidden, BatchFeature):
+            progress_token_debug = vlm_progress_hidden
+            vlm_progress_hidden = progress_token_debug.progress_hidden
         if vlm_progress_hidden is not None:
             features["progress_hidden"] = vlm_progress_hidden
+        if progress_token_debug is not None:
+            token_len = progress_token_debug.progress_token_weights.shape[1]
+            features["progress_token_weights"] = progress_token_debug.progress_token_weights
+            features["progress_token_scores"] = progress_token_debug.progress_token_scores
+            features["progress_token_mask"] = progress_token_debug.progress_token_mask
+            if "image_mask" in backbone_output:
+                features["progress_token_image_mask"] = backbone_output.image_mask[:, :token_len]
+            if "input_ids" in backbone_output:
+                features["progress_token_input_ids"] = backbone_output.input_ids[:, :token_len]
+            if "backbone_attention_mask" in backbone_output:
+                features["progress_token_attention_mask"] = backbone_output.backbone_attention_mask[
+                    :, :token_len
+                ]
+            if "image_grid_thw" in backbone_output:
+                features["progress_token_image_grid_thw"] = backbone_output.image_grid_thw
         if self._uses_vlm_dit_progress_head():
             features["progress_backbone_output"] = progress_backbone_output
         return BatchFeature(data=features)
@@ -1343,8 +1394,11 @@ class Gr00tN1d7ActionHead(nn.Module):
             backbone_output,
             action_input,
             progress_backbone_output=progress_backbone_output,
+            return_progress_token_weights=bool(
+                options and options.get("return_progress_token_weights", False)
+            ),
         )
-        return self.get_action_with_features(
+        output = self.get_action_with_features(
             backbone_features=features.backbone_features,
             state_features=features.state_features,
             embodiment_id=action_input.embodiment_id,
@@ -1354,6 +1408,19 @@ class Gr00tN1d7ActionHead(nn.Module):
             progress_hidden=features.get("progress_hidden"),
             progress_backbone_output=features.get("progress_backbone_output"),
         )
+        if options and options.get("return_progress_token_weights", False):
+            for key in (
+                "progress_token_weights",
+                "progress_token_scores",
+                "progress_token_mask",
+                "progress_token_image_mask",
+                "progress_token_input_ids",
+                "progress_token_attention_mask",
+                "progress_token_image_grid_thw",
+            ):
+                if key in features:
+                    output[key] = features[key]
+        return output
 
     @property
     def device(self):

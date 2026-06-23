@@ -236,6 +236,23 @@ class TestActionHeadForward:
         assert hidden.shape == (1, config.progress_concat_project_dim)
         assert torch.isfinite(hidden).all()
 
+    def test_vlm_concat_attention_pool_can_return_token_weights(self):
+        config = _small_config(
+            enable_progress_head=True,
+            progress_head_source="vlm_concat_attention_pool",
+            progress_concat_project_dim=8,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        backbone_output = _make_backbone_output(config, batch_size=1, seq_len=4)
+        backbone_output.backbone_attention_mask[:, 2:] = 0
+
+        debug = head._attention_pool_vlm_features(backbone_output, return_debug=True)
+
+        assert debug.progress_hidden.shape == (1, config.progress_concat_project_dim)
+        assert debug.progress_token_weights.shape == (1, 4)
+        assert torch.allclose(debug.progress_token_weights[:, 2:], torch.zeros(1, 2))
+        assert torch.allclose(debug.progress_token_weights.sum(dim=1), torch.ones(1))
+
     def test_vlm_layer_concat_linear_progress_head_masks_and_pads_tokens(self):
         config = _small_config(
             enable_progress_head=True,

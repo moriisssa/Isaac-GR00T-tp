@@ -405,7 +405,7 @@ class Gr00tPolicy(BasePolicy):
 
         # Step 4: Run model inference to predict actions
         with torch.inference_mode():
-            model_pred = self.model.get_action(**collated_inputs)
+            model_pred = self.model.get_action(**collated_inputs, options=options)
         normalized_action = model_pred["action_pred"].float()
         info = {}
         if "progress_logits" in model_pred:
@@ -414,6 +414,21 @@ class Gr00tPolicy(BasePolicy):
             info["progress"] = model_pred["progress_pred"].float().cpu().numpy()
         if "progress_class_pred" in model_pred:
             info["progress_class"] = model_pred["progress_class_pred"].long().cpu().numpy()
+        for key in (
+            "progress_token_weights",
+            "progress_token_scores",
+            "progress_token_mask",
+            "progress_token_image_mask",
+            "progress_token_input_ids",
+            "progress_token_attention_mask",
+            "progress_token_image_grid_thw",
+        ):
+            if key in model_pred:
+                value = model_pred[key]
+                if isinstance(value, torch.Tensor):
+                    info[key] = value.detach().cpu().numpy()
+                else:
+                    info[key] = value
 
         # Step 5: Decode actions from normalized space back to physical units
         batched_states = {}
