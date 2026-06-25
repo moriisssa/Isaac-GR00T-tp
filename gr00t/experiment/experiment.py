@@ -257,6 +257,7 @@ def run(config: Config):
         ddp_bucket_cap_mb=config.training.ddp_bucket_cap_mb,
         eval_strategy=config.training.eval_strategy,
         eval_steps=config.training.eval_steps,
+        accelerator_config={"dispatch_batches": False},
         batch_eval_metrics=True,
         remove_unused_columns=config.training.remove_unused_columns,
         ignore_data_skip=True,
