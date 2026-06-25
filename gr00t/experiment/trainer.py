@@ -473,6 +473,28 @@ class Gr00tTrainer(Trainer):
     # Loss / accuracy computation override
     # ------------------------------------------------------------------
 
+    def prediction_step(
+        self,
+        model,
+        inputs,
+        prediction_loss_only: bool,
+        ignore_keys: Optional[list[str]] = None,
+    ):
+        if "pair_inputs" in inputs:
+            inputs = self._prepare_inputs(inputs)
+            with torch.no_grad():
+                with self.compute_loss_context_manager():
+                    loss, _ = self._compute_pairwise_progress_loss(model, inputs)
+                loss = loss.detach().mean()
+            return (loss, None, None)
+
+        return super().prediction_step(
+            model,
+            inputs,
+            prediction_loss_only=prediction_loss_only,
+            ignore_keys=ignore_keys,
+        )
+
     def compute_loss(
         self,
         model,
