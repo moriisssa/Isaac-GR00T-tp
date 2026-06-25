@@ -101,6 +101,20 @@ if [[ "$SAVE_ONLY_MODEL" == "1" ]]; then
   SAVE_ONLY_MODEL_FLAG+=(--save_only_model)
 fi
 
+SAVE_BEST_EVAL_METRIC_GREATER_FLAG=()
+case "${SAVE_BEST_EVAL_METRIC_GREATER_IS_BETTER,,}" in
+  1|true|yes|y)
+    SAVE_BEST_EVAL_METRIC_GREATER_FLAG+=(--save_best_eval_metric_greater_is_better)
+    ;;
+  0|false|no|n)
+    SAVE_BEST_EVAL_METRIC_GREATER_FLAG+=(--no-save_best_eval_metric_greater_is_better)
+    ;;
+  *)
+    echo "Invalid SAVE_BEST_EVAL_METRIC_GREATER_IS_BETTER: $SAVE_BEST_EVAL_METRIC_GREATER_IS_BETTER" >&2
+    exit 1
+    ;;
+esac
+
 uv run torchrun --nproc_per_node="$NUM_GPUS" --master_port="$MASTER_PORT" \
   gr00t/experiment/launch_finetune.py \
   --base_model_path "$BASE_MODEL_PATH" \
@@ -118,7 +132,7 @@ uv run torchrun --nproc_per_node="$NUM_GPUS" --master_port="$MASTER_PORT" \
   --eval_batch_size "$EVAL_BATCH_SIZE" \
   --num_eval_shards_per_epoch "$NUM_EVAL_SHARDS_PER_EPOCH" \
   --save_best_eval_metric_name "$SAVE_BEST_EVAL_METRIC_NAME" \
-  --save_best_eval_metric_greater_is_better "$SAVE_BEST_EVAL_METRIC_GREATER_IS_BETTER" \
+  "${SAVE_BEST_EVAL_METRIC_GREATER_FLAG[@]}" \
   --max_steps "$MAX_STEPS" \
   --warmup_ratio 0.1 \
   --weight_decay 1e-5 \
