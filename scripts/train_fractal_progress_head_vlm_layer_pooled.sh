@@ -56,6 +56,13 @@ GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-16}"
 SAVE_STEPS="${SAVE_STEPS:-1000}"
 SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-1}"
 SAVE_ONLY_MODEL="${SAVE_ONLY_MODEL:-1}"
+EVAL_STRATEGY="${EVAL_STRATEGY:-no}"
+EVAL_STEPS="${EVAL_STEPS:-500}"
+EVAL_SET_SPLIT_RATIO="${EVAL_SET_SPLIT_RATIO:-0.1}"
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-2}"
+NUM_EVAL_SHARDS_PER_EPOCH="${NUM_EVAL_SHARDS_PER_EPOCH:-64}"
+SAVE_BEST_EVAL_METRIC_NAME="${SAVE_BEST_EVAL_METRIC_NAME:-}"
+SAVE_BEST_EVAL_METRIC_GREATER_IS_BETTER="${SAVE_BEST_EVAL_METRIC_GREATER_IS_BETTER:-true}"
 USE_WANDB="${USE_WANDB:-1}"
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-0}"
 SHARD_SIZE="${SHARD_SIZE:-1024}"
@@ -105,6 +112,13 @@ uv run torchrun --nproc_per_node="$NUM_GPUS" --master_port="$MASTER_PORT" \
   --wandb_project "$WANDB_PROJECT" \
   --save_steps "$SAVE_STEPS" \
   --save_total_limit "$SAVE_TOTAL_LIMIT" \
+  --eval_strategy "$EVAL_STRATEGY" \
+  --eval_steps "$EVAL_STEPS" \
+  --eval_set_split_ratio "$EVAL_SET_SPLIT_RATIO" \
+  --eval_batch_size "$EVAL_BATCH_SIZE" \
+  --num_eval_shards_per_epoch "$NUM_EVAL_SHARDS_PER_EPOCH" \
+  --save_best_eval_metric_name "$SAVE_BEST_EVAL_METRIC_NAME" \
+  --save_best_eval_metric_greater_is_better "$SAVE_BEST_EVAL_METRIC_GREATER_IS_BETTER" \
   --max_steps "$MAX_STEPS" \
   --warmup_ratio 0.1 \
   --weight_decay 1e-5 \

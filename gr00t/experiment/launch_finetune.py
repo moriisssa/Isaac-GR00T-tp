@@ -119,6 +119,14 @@ if __name__ == "__main__":
     config.training.output_dir = ft_config.output_dir
     config.training.save_steps = ft_config.save_steps
     config.training.save_total_limit = ft_config.save_total_limit
+    config.training.eval_strategy = ft_config.eval_strategy
+    config.training.eval_steps = ft_config.eval_steps
+    config.training.eval_set_split_ratio = ft_config.eval_set_split_ratio
+    config.training.eval_batch_size = ft_config.eval_batch_size
+    config.training.save_best_eval_metric_name = ft_config.save_best_eval_metric_name
+    config.training.save_best_eval_metric_greater_is_better = (
+        ft_config.save_best_eval_metric_greater_is_better
+    )
     config.training.num_gpus = ft_config.num_gpus
     config.training.use_ddp = ft_config.use_ddp
     config.training.use_wandb = ft_config.use_wandb
@@ -130,6 +138,7 @@ if __name__ == "__main__":
     config.data.shard_size = ft_config.shard_size
     config.data.episode_sampling_rate = ft_config.episode_sampling_rate
     config.data.num_shards_per_epoch = ft_config.num_shards_per_epoch
+    config.data.num_eval_shards_per_epoch = ft_config.num_eval_shards_per_epoch
     config.data.progress_target = ft_config.progress_target
     config.data.tail_shrink_action_chunk = ft_config.tail_shrink_action_chunk
     config.data.progress_pairwise_training = ft_config.progress_loss_type == "pairwise_bt"

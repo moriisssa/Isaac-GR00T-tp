@@ -310,6 +310,10 @@ class ShardedMixtureDataset(IterableDataset):
             shard_sampling_schedule = []
             for i, dataset in enumerate(self.datasets):
                 shard_sampling_schedule.extend([(i, j) for j in range(len(dataset))])
+            if 0 < self.num_shards_per_epoch < len(shard_sampling_schedule):
+                rng = np.random.default_rng(self.seed + self.epoch)
+                rng.shuffle(shard_sampling_schedule)
+                shard_sampling_schedule = shard_sampling_schedule[: self.num_shards_per_epoch]
         return shard_sampling_schedule
 
     def filter_shard_sample_schedule(self):
@@ -366,6 +370,22 @@ class ShardedMixtureDataset(IterableDataset):
         4. Shuffle timesteps within each shard for additional randomization
         5. Handle epoch transitions and schedule regeneration
         """
+        if not self.training:
+            self.worker_shard_sampling_schedule = self.filter_shard_sample_schedule()
+            rng = np.random.default_rng(self.seed + self.epoch)
+            for dataset_index, shard_index in self.worker_shard_sampling_schedule:
+                print(
+                    f"Rank {self.rank}, Worker {self.worker_id}: Evaluating shard "
+                    f"{shard_index} in dataset {dataset_index}"
+                )
+                shard = self.datasets[dataset_index].get_shard(shard_index)
+                indices_in_shard = np.arange(len(shard))
+                rng.shuffle(indices_in_shard)
+                for index in indices_in_shard:
+                    yield shard[index]
+            self.epoch += 1
+            return
+
         # Start background thread pool
         self._executor = ThreadPoolExecutor(max_workers=1)
 

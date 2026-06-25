@@ -205,6 +205,8 @@ class ShardedSingleStepDataset(ShardedDataset):
         allow_padding: bool = False,
         progress_target: str = "current",
         tail_shrink_action_chunk: bool = False,
+        episode_split: str | None = None,
+        eval_set_split_ratio: float = 0.1,
     ):
         """Initialize single-step dataset with sharding configuration."""
         super().__init__(dataset_path)
@@ -218,6 +220,8 @@ class ShardedSingleStepDataset(ShardedDataset):
         self.allow_padding = allow_padding
         self.progress_target = progress_target
         self.tail_shrink_action_chunk = tail_shrink_action_chunk
+        self.episode_split = episode_split
+        self.eval_set_split_ratio = eval_set_split_ratio
         self.processor = None
         self.rng = np.random.default_rng(seed)
         action_delta_indices = modality_configs["action"].delta_indices
@@ -229,9 +233,37 @@ class ShardedSingleStepDataset(ShardedDataset):
             video_backend=video_backend,
             video_backend_kwargs=video_backend_kwargs,
         )
+        self.episode_indices = self._select_episode_indices()
 
         # Create balanced shards from episode timesteps
         self.shard_dataset()
+
+    def _select_episode_indices(self) -> np.ndarray:
+        """Select train/eval episodes with a deterministic trajectory-level split."""
+        all_episode_indices = np.arange(len(self.episode_loader.episode_lengths), dtype=int)
+        if self.episode_split is None:
+            return all_episode_indices
+
+        if self.episode_split not in {"train", "eval"}:
+            raise ValueError(f"Unsupported episode_split: {self.episode_split}")
+        if not 0.0 < self.eval_set_split_ratio < 1.0:
+            raise ValueError(
+                "eval_set_split_ratio must be in (0, 1) when episode_split is set; "
+                f"got {self.eval_set_split_ratio}"
+            )
+
+        rng = np.random.default_rng(self.seed)
+        shuffled_episode_indices = rng.permutation(all_episode_indices)
+        eval_count = max(1, int(round(len(shuffled_episode_indices) * self.eval_set_split_ratio)))
+        eval_count = min(eval_count, len(shuffled_episode_indices) - 1)
+        eval_indices = np.sort(shuffled_episode_indices[:eval_count])
+        train_indices = np.sort(shuffled_episode_indices[eval_count:])
+        selected = train_indices if self.episode_split == "train" else eval_indices
+        print(
+            f"Using {len(selected)} {self.episode_split} episodes out of "
+            f"{len(all_episode_indices)} for dataset {self.dataset_path}"
+        )
+        return selected
 
     def shard_dataset(self):
         """
@@ -248,7 +280,7 @@ class ShardedSingleStepDataset(ShardedDataset):
         - Diversity within shards (mix of episodes and timesteps)
         - Reproducible sharding based on seed
         """
-        shuffled_episode_indices = self.rng.permutation(len(self.episode_loader.episode_lengths))
+        shuffled_episode_indices = self.rng.permutation(self.episode_indices)
         num_splits = int(1 / self.episode_sampling_rate)
 
         assert len(shuffled_episode_indices) > 0, (

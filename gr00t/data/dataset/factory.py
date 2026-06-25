@@ -41,18 +41,19 @@ class DatasetFactory:
         self, processor: BaseProcessor
     ) -> tuple[ShardedMixtureDataset, ShardedMixtureDataset | None]:
         """Build the dataset. Returns a tuple of (train_dataset, eval_dataset)."""
-        assert self.config.training.eval_strategy == "no", (
-            "Sharded dataset does not support evaluation sets"
-        )
+        use_eval = self.config.training.eval_strategy != "no"
 
         all_datasets = []
         all_weights = []
+        all_eval_datasets = []
+        all_eval_weights = []
         for dataset_spec in tqdm(
             self.config.data.datasets,
             total=len(self.config.data.datasets),
             desc="Initializing datasets",
         ):
             datasets = []
+            eval_datasets = []
             for dataset_path in dataset_spec.dataset_paths:
                 embodiment_tag = dataset_spec.embodiment_tag
                 assert embodiment_tag is not None, "Embodiment tag is required"
@@ -73,7 +74,7 @@ class DatasetFactory:
                 dataset_kwargs = {}
                 if self.config.data.progress_pairwise_training:
                     dataset_kwargs["progress_pair_gap_min"] = self.config.data.progress_pair_gap_min
-                dataset = dataset_cls(
+                common_dataset_kwargs = dict(
                     dataset_path=dataset_path,
                     embodiment_tag=EmbodimentTag(embodiment_tag),
                     modality_configs=self.config.data.modality_configs[embodiment_tag],
@@ -84,8 +85,21 @@ class DatasetFactory:
                     allow_padding=self.config.data.allow_padding,
                     progress_target=self.config.data.progress_target,
                     tail_shrink_action_chunk=self.config.data.tail_shrink_action_chunk,
+                    eval_set_split_ratio=self.config.training.eval_set_split_ratio,
                     **dataset_kwargs,
                 )
+                if use_eval:
+                    dataset = dataset_cls(
+                        **common_dataset_kwargs,
+                        episode_split="train",
+                    )
+                    eval_dataset = dataset_cls(
+                        **common_dataset_kwargs,
+                        episode_split="eval",
+                    )
+                    eval_datasets.append(eval_dataset)
+                else:
+                    dataset = dataset_cls(**common_dataset_kwargs)
                 datasets.append(dataset)
             dataset_lengths = np.array([len(dataset) for dataset in datasets])
             dataset_relative_lengths = dataset_lengths / dataset_lengths.sum()
@@ -93,16 +107,35 @@ class DatasetFactory:
                 weight = relative_length * dataset_spec.mix_ratio
                 all_datasets.append(dataset)
                 all_weights.append(weight)
+            if use_eval:
+                eval_dataset_lengths = np.array([len(dataset) for dataset in eval_datasets])
+                eval_dataset_relative_lengths = (
+                    eval_dataset_lengths / eval_dataset_lengths.sum()
+                )
+                for dataset, relative_length in zip(eval_datasets, eval_dataset_relative_lengths):
+                    weight = relative_length * dataset_spec.mix_ratio
+                    all_eval_datasets.append(dataset)
+                    all_eval_weights.append(weight)
 
-        return (
-            ShardedMixtureDataset(
-                datasets=all_datasets,
-                weights=all_weights,
-                processor=processor,
-                seed=self.config.data.seed,
-                training=True,
-                num_shards_per_epoch=self.config.data.num_shards_per_epoch,
-                override_pretraining_statistics=self.config.data.override_pretraining_statistics,
-            ),
-            None,
+        train_dataset = ShardedMixtureDataset(
+            datasets=all_datasets,
+            weights=all_weights,
+            processor=processor,
+            seed=self.config.data.seed,
+            training=True,
+            num_shards_per_epoch=self.config.data.num_shards_per_epoch,
+            override_pretraining_statistics=self.config.data.override_pretraining_statistics,
         )
+        eval_dataset = None
+        if use_eval:
+            eval_dataset = ShardedMixtureDataset(
+                datasets=all_eval_datasets,
+                weights=all_eval_weights,
+                processor=processor,
+                seed=self.config.data.seed + 10_000,
+                training=False,
+                num_shards_per_epoch=self.config.data.num_eval_shards_per_epoch,
+                override_pretraining_statistics=self.config.data.override_pretraining_statistics,
+            )
+
+        return train_dataset, eval_dataset

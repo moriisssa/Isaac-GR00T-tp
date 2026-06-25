@@ -251,6 +251,27 @@ class FinetuneConfig:
     save_total_limit: int = 5
     """Maximum number of checkpoints to keep before older ones are deleted."""
 
+    eval_strategy: str = "no"
+    """Evaluation strategy passed to Hugging Face Trainer: 'no', 'steps', or 'epoch'."""
+
+    eval_steps: int = 500
+    """Run validation every N training steps when eval_strategy='steps'."""
+
+    eval_set_split_ratio: float = 0.1
+    """Trajectory-level fraction held out for validation when evaluation is enabled."""
+
+    eval_batch_size: int = 2
+    """Per-device validation batch size."""
+
+    num_eval_shards_per_epoch: int = 64
+    """Maximum number of held-out validation shards to scan per evaluation pass."""
+
+    save_best_eval_metric_name: str = ""
+    """Metric name used by the best-checkpoint callback, for example 'eval_loss'."""
+
+    save_best_eval_metric_greater_is_better: bool = True
+    """Whether larger values of save_best_eval_metric_name are better."""
+
     num_gpus: int = 1
     """Number of GPUs available for distributed or single-node training."""
 
