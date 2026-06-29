@@ -69,6 +69,9 @@ SHARD_SIZE="${SHARD_SIZE:-1024}"
 NUM_SHARDS_PER_EPOCH="${NUM_SHARDS_PER_EPOCH:-512}"
 EPISODE_SAMPLING_RATE="${EPISODE_SAMPLING_RATE:-0.1}"
 LEARNING_RATE="${LEARNING_RATE:-3e-5}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-1e-5}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
+WARMUP_RATIO="${WARMUP_RATIO:-0.1}"
 PROGRESS_TARGET="${PROGRESS_TARGET:-current}"
 LOAD_BF16="${LOAD_BF16:-1}"
 RESUME="${RESUME:-0}"
@@ -134,9 +137,10 @@ uv run torchrun --nproc_per_node="$NUM_GPUS" --master_port="$MASTER_PORT" \
   --save_best_eval_metric_name "$SAVE_BEST_EVAL_METRIC_NAME" \
   "${SAVE_BEST_EVAL_METRIC_GREATER_FLAG[@]}" \
   --max_steps "$MAX_STEPS" \
-  --warmup_ratio 0.1 \
-  --weight_decay 1e-5 \
+  --warmup_ratio "$WARMUP_RATIO" \
+  --weight_decay "$WEIGHT_DECAY" \
   --learning_rate "$LEARNING_RATE" \
+  --gradient_accumulation_steps "$GRADIENT_ACCUMULATION_STEPS" \
   "${WANDB_FLAG[@]}" \
   --global_batch_size "$GLOBAL_BATCH_SIZE" \
   --color_jitter_params brightness 0.3 contrast 0.4 saturation 0.5 hue 0.08 \
